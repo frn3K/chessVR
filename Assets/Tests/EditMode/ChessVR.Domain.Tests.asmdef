@@ -1,0 +1,21 @@
+{
+  "name": "ChessVR.Domain.Tests",
+  "rootNamespace": "ChessVR.Domain.Tests",
+  "references": [
+    "ChessVR.Domain"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

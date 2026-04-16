@@ -1,0 +1,37 @@
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+[Pp]ackages/packages-lock.json
+
+# Unity generated meta for imported assets should be tracked.
+# IDE and OS noise should not.
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Crash reports
+sysinfo.txt
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
