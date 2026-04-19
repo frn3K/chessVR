@@ -1,5 +1,10 @@
+using System.Collections.Generic;
+using System.Reflection;
 using ChessVR.Domain;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.Rendering;
 
 namespace ChessVR.Runtime
@@ -26,14 +31,62 @@ namespace ChessVR.Runtime
         [Header("Runtime")]
         [SerializeField] private bool rebuildOnStart = true;
 
+        [Header("Legal move highlights")]
+        [SerializeField] private Color legalMoveHighlightColor = new(0.15f, 0.75f, 0.35f, 1f);
+        [SerializeField] private float highlightHeightOffset = 0.05f;
+
+        [Tooltip("Promień dopasowania figury do pola (przestrzeń lokalna PiecesRoot), w jednostkach świata lokalnego — duży = ręczne ustawienia.")]
+        [SerializeField] private float pieceSquareMatchRadius = 0.9f;
+
+        [Header("Collider fix (for manually scaled pieces)")]
+        [Tooltip("Jeśli figury są ręcznie skalowane (np. skala 25), BoxCollider będzie dopasowany do rendererów.")]
+        [SerializeField] private bool fixPieceCollidersOnStart = true;
+
         private Transform _boardRoot;
         private Transform _piecesRoot;
+        private Transform _highlightsRoot;
+        private BoardSquare? _selectedSquare;
+
+        private void Awake()
+        {
+            EnsureEventSystemExists();
+            EnsureMainCameraHasPhysicsRaycaster();
+        }
 
         private void Start()
         {
             if (rebuildOnStart)
             {
                 RebuildImmediate();
+            }
+            else
+            {
+                EnsureDependencies();
+                EnsureRoots();
+                EnsurePieceViewsForPiecesUnderRoot();
+                if (fixPieceCollidersOnStart)
+                {
+                    FixPieceCollidersUnderRoot();
+                }
+            }
+        }
+
+        private void Update()
+        {
+            if (Mouse.current == null || !Mouse.current.leftButton.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            var es = EventSystem.current;
+            if (es == null)
+            {
+                return;
+            }
+
+            if (es.IsPointerOverGameObject(-1) || es.IsPointerOverGameObject(0))
+            {
+                Debug.Log("KLIK ZABLOKOWANY PRZEZ UI");
             }
         }
 
@@ -43,11 +96,358 @@ namespace ChessVR.Runtime
             EnsureDependencies();
             EnsureRoots();
 
+            ClearLegalMoveHighlights();
             ClearChildren(_boardRoot);
             ClearChildren(_piecesRoot);
 
             BuildBoard();
             BuildPieces();
+            EnsurePieceViewsForPiecesUnderRoot();
+            if (fixPieceCollidersOnStart)
+            {
+                FixPieceCollidersUnderRoot();
+            }
+        }
+
+        [ContextMenu("Fix Piece Colliders (Box fit to renderers)")]
+        public void FixPieceCollidersUnderRoot()
+        {
+            EnsureDependencies();
+            EnsureRoots();
+
+            if (_piecesRoot == null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < _piecesRoot.childCount; i++)
+            {
+                var pieceRoot = _piecesRoot.GetChild(i);
+                if (pieceRoot == null)
+                {
+                    continue;
+                }
+
+                RemoveCapsuleColliders(pieceRoot);
+
+                if (!TryGetCombinedWorldBounds(pieceRoot, out var worldBounds))
+                {
+                    continue;
+                }
+
+                var target = pieceRoot.gameObject;
+
+                // Ensure BoxCollider exists on the same object that will host PieceView.
+                var box = target.GetComponent<BoxCollider>();
+                if (box == null)
+                {
+                    box = target.AddComponent<BoxCollider>();
+                }
+
+                box.center = pieceRoot.InverseTransformPoint(worldBounds.center);
+
+                // Convert world-space bounds size to local size.
+                var lossy = pieceRoot.lossyScale;
+                var sx = Mathf.Abs(lossy.x) < 1e-5f ? 1f : Mathf.Abs(lossy.x);
+                var sy = Mathf.Abs(lossy.y) < 1e-5f ? 1f : Mathf.Abs(lossy.y);
+                var sz = Mathf.Abs(lossy.z) < 1e-5f ? 1f : Mathf.Abs(lossy.z);
+                box.size = new Vector3(worldBounds.size.x / sx, worldBounds.size.y / sy, worldBounds.size.z / sz);
+
+                // PieceView must be on the same object as the collider that receives clicks.
+                // We standardize it to the piece root.
+                var childViews = pieceRoot.GetComponentsInChildren<PieceView>(true);
+                for (var v = 0; v < childViews.Length; v++)
+                {
+                    var view = childViews[v];
+                    if (view != null && view.gameObject != target)
+                    {
+                        Destroy(view);
+                    }
+                }
+
+                if (target.GetComponent<PieceView>() == null)
+                {
+                    target.AddComponent<PieceView>();
+                }
+            }
+        }
+
+        private static void RemoveCapsuleColliders(Transform root)
+        {
+            var capsules = root.GetComponentsInChildren<CapsuleCollider>(true);
+            for (var i = 0; i < capsules.Length; i++)
+            {
+                if (capsules[i] != null)
+                {
+                    Destroy(capsules[i]);
+                }
+            }
+        }
+
+        private static bool TryGetCombinedWorldBounds(Transform root, out Bounds bounds)
+        {
+            bounds = default;
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            var hasAny = false;
+
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled)
+                {
+                    continue;
+                }
+
+                if (!hasAny)
+                {
+                    bounds = r.bounds;
+                    hasAny = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(r.bounds);
+                }
+            }
+
+            return hasAny;
+        }
+
+        /// <summary>
+        /// Dla każdego collidera pod <see cref="_piecesRoot"/> dopina <see cref="PieceView"/> i odświeża referencje
+        /// (klik trafia w obiekt z colliderem — często mesh dziecka, nie korzeń figury).
+        /// </summary>
+        public void EnsurePieceViewsForPiecesUnderRoot()
+        {
+            EnsureDependencies();
+            EnsureRoots();
+
+            var board = gameController.CurrentBoard;
+            if (board == null || _piecesRoot == null)
+            {
+                return;
+            }
+
+            var colliders = _piecesRoot.GetComponentsInChildren<Collider>(true);
+            for (var i = 0; i < colliders.Length; i++)
+            {
+                var col = colliders[i];
+                if (col == null || !col.enabled || col.isTrigger)
+                {
+                    continue;
+                }
+
+                var pieceRoot = FindPieceRootUnderPiecesRoot(col.transform);
+                if (pieceRoot == null)
+                {
+                    Debug.Log($"Nie dopasowano obiektu {col.gameObject.name}");
+                    continue;
+                }
+
+                var matchPosition = _piecesRoot.InverseTransformPoint(col.bounds.center);
+                if (!TryMatchPieceAtSquareFromLocalPosition(matchPosition, board, out var square, out var piece))
+                {
+                    Debug.Log(
+                        $"Nie dopasowano obiektu {col.gameObject.name} (środek collidera w lokalnym układzie PiecesRoot: X={matchPosition.x:F3}, Z={matchPosition.z:F3})");
+                    continue;
+                }
+
+                Debug.Log(
+                    $"Znalazłem obiekt {col.gameObject.name} na pozycji [{matchPosition.x:F3}, {matchPosition.z:F3}], przypisuję go do pola [{square}]");
+
+                var host = col.gameObject;
+                var view = host.GetComponent<PieceView>();
+                if (view == null)
+                {
+                    view = host.AddComponent<PieceView>();
+                }
+
+                view.Apply(piece, square, gameController, this);
+            }
+        }
+
+        private Transform FindPieceRootUnderPiecesRoot(Transform t)
+        {
+            var current = t;
+            while (current != null && current.parent != _piecesRoot)
+            {
+                current = current.parent;
+            }
+
+            return current != null && current.parent == _piecesRoot ? current : null;
+        }
+
+        /// <summary>
+        /// Dopasowuje pole i figurę po XZ w przestrzeni lokalnej <see cref="_piecesRoot"/> (duży próg pod ręczne ustawienia).
+        /// </summary>
+        private bool TryMatchPieceAtSquareFromLocalPosition(Vector3 localOnPiecesRoot, BoardState board, out BoardSquare square, out Piece piece)
+        {
+            square = default;
+            piece = Piece.None;
+            var thresholdSq = pieceSquareMatchRadius * pieceSquareMatchRadius;
+            var best = float.MaxValue;
+
+            for (var index = 0; index < 64; index++)
+            {
+                var candidateSquare = BoardSquare.FromIndex(index);
+                var candidatePiece = board.GetPiece(candidateSquare);
+                if (candidatePiece.IsNone)
+                {
+                    continue;
+                }
+
+                var expected = PieceLocalPosition(candidateSquare, candidatePiece.Type);
+                var dx = expected.x - localOnPiecesRoot.x;
+                var dz = expected.z - localOnPiecesRoot.z;
+                var distSq = dx * dx + dz * dz;
+                if (distSq < best)
+                {
+                    best = distSq;
+                    square = candidateSquare;
+                    piece = candidatePiece;
+                }
+            }
+
+            return !piece.IsNone && best <= thresholdSq;
+        }
+
+        private static void EnsureEventSystemExists()
+        {
+            var eventSystem = UnityEngine.Object.FindFirstObjectByType<EventSystem>();
+            if (eventSystem == null)
+            {
+                var go = new GameObject("EventSystem");
+                eventSystem = go.AddComponent<EventSystem>();
+            }
+
+            var uiModule = eventSystem.GetComponent<InputSystemUIInputModule>();
+            if (uiModule == null)
+            {
+                uiModule = eventSystem.gameObject.AddComponent<InputSystemUIInputModule>();
+            }
+
+            ConfigureInputSystemUiModule(uiModule);
+        }
+
+        /// <summary>
+        /// Przywraca domyślny asset akcji UI (wbudowany DefaultInputActions) i referencje Point / Click itd.,
+        /// gdy moduł ma puste sloty — typowy przypadek przy ręcznej scenie bez przypisanego Input Action Asset.
+        /// </summary>
+        private static void ConfigureInputSystemUiModule(InputSystemUIInputModule module)
+        {
+            if (module == null)
+            {
+                return;
+            }
+
+            if (NeedsDefaultUiActions(module))
+            {
+                var wasEnabled = module.enabled;
+                module.enabled = false;
+                module.UnassignActions();
+                module.AssignDefaultActions();
+                module.enabled = wasEnabled;
+                Debug.Log("EventSystem: Domyślne akcje wejścia zostały przypisane.");
+            }
+
+            TryEnableBuiltinActionsAsFallback(module);
+        }
+
+        private static bool NeedsDefaultUiActions(InputSystemUIInputModule module)
+        {
+            return module.point == null || module.point.action == null
+                   || module.leftClick == null || module.leftClick.action == null;
+        }
+
+        /// <summary>
+        /// Ustawia opcję inspektora „Enable Builtin Actions As Fallback”, jeśli istnieje w tej wersji Input Systemu.
+        /// </summary>
+        private static void TryEnableBuiltinActionsAsFallback(InputSystemUIInputModule module)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = typeof(InputSystemUIInputModule);
+            foreach (var memberName in new[] { "enableBuiltinActionsAsFallback", "m_EnableBuiltinActionsAsFallback" })
+            {
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null && prop.PropertyType == typeof(bool) && prop.CanWrite)
+                {
+                    prop.SetValue(module, true);
+                    return;
+                }
+
+                var field = type.GetField(memberName, flags);
+                if (field != null && field.FieldType == typeof(bool))
+                {
+                    field.SetValue(module, true);
+                    return;
+                }
+            }
+        }
+
+        private static void EnsureMainCameraHasPhysicsRaycaster()
+        {
+            var cam = Camera.main;
+            if (cam == null)
+            {
+                return;
+            }
+
+            var raycaster = cam.GetComponent<PhysicsRaycaster>();
+            if (raycaster == null)
+            {
+                raycaster = cam.gameObject.AddComponent<PhysicsRaycaster>();
+            }
+
+            raycaster.eventMask = (LayerMask)(-1);
+        }
+
+        public bool IsSquareCurrentlySelected(BoardSquare square)
+        {
+            return _selectedSquare.HasValue && _selectedSquare.Value.Equals(square);
+        }
+
+        public void ClearLegalMoveHighlights()
+        {
+            _selectedSquare = null;
+            if (_highlightsRoot == null)
+            {
+                return;
+            }
+
+            ClearChildren(_highlightsRoot);
+        }
+
+        /// <summary>Rysuje płaskie znaczniki na polach docelowych; lista ruchów pochodzi z <see cref="ChessGameController.GetLegalMovesFrom"/> (adapter zasad).</summary>
+        public void ShowLegalMoveHighlights(BoardSquare from, IReadOnlyList<ChessMove> legalMoves)
+        {
+            EnsureDependencies();
+            EnsureRoots();
+            ClearLegalMoveHighlights();
+            _selectedSquare = from;
+
+            if (legalMoves == null || legalMoves.Count == 0)
+            {
+                return;
+            }
+
+            var seen = new HashSet<BoardSquare>();
+            for (var i = 0; i < legalMoves.Count; i++)
+            {
+                var to = legalMoves[i].To;
+                if (!seen.Add(to))
+                {
+                    continue;
+                }
+
+                var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                marker.name = $"LegalHighlight_{to}";
+                marker.transform.SetParent(_highlightsRoot, false);
+                var xz = SquareToLocalPosition(to, boardHeight);
+                marker.transform.localPosition = new Vector3(xz.x, boardHeight + highlightHeightOffset, xz.z);
+                marker.transform.localScale = new Vector3(squareSize * 0.42f, 0.008f, squareSize * 0.42f);
+                marker.transform.localRotation = Quaternion.identity;
+                Tint(marker, legalMoveHighlightColor);
+                DestroyCollider(marker);
+            }
         }
 
         private void EnsureDependencies()
@@ -72,6 +472,7 @@ namespace ChessVR.Runtime
         {
             _boardRoot = FindOrCreateChild("BoardRoot");
             _piecesRoot = FindOrCreateChild("PiecesRoot");
+            _highlightsRoot = FindOrCreateChild("LegalHighlightsRoot");
         }
 
         private Transform FindOrCreateChild(string childName)
@@ -145,8 +546,7 @@ namespace ChessVR.Runtime
             root.transform.localPosition = PieceLocalPosition(square, piece.Type);
             Tint(root, piece.Color == PieceColor.White ? whitePieceColor : blackPieceColor);
 
-            var view = root.AddComponent<PieceView>();
-            view.Apply(piece, square);
+            AttachOrRefreshPieceView(root, square, piece);
 
             if (piece.Type == PieceType.King)
             {
@@ -201,6 +601,17 @@ namespace ChessVR.Runtime
             return go;
         }
 
+        private void AttachOrRefreshPieceView(GameObject root, BoardSquare square, Piece piece)
+        {
+            var view = root.GetComponent<PieceView>();
+            if (view == null)
+            {
+                view = root.AddComponent<PieceView>();
+            }
+
+            view.Apply(piece, square, gameController, this);
+        }
+
         private void AddQueenTop(Transform parent, PieceColor color)
         {
             var orb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -209,6 +620,7 @@ namespace ChessVR.Runtime
             orb.transform.localPosition = new Vector3(0f, 0.18f, 0f);
             orb.transform.localScale = new Vector3(0.08f, 0.08f, 0.08f);
             Tint(orb, color == PieceColor.White ? whitePieceColor : blackPieceColor);
+            SetIgnoreRaycast(orb);
         }
 
         private void AddKingCrown(Transform parent, PieceColor color)
@@ -226,6 +638,28 @@ namespace ChessVR.Runtime
             horizontal.transform.localPosition = new Vector3(0f, 0.24f, 0f);
             horizontal.transform.localScale = new Vector3(0.09f, 0.03f, 0.03f);
             Tint(horizontal, color == PieceColor.White ? whitePieceColor : blackPieceColor);
+            SetIgnoreRaycast(vertical);
+            SetIgnoreRaycast(horizontal);
+        }
+
+        private static void SetIgnoreRaycast(GameObject gameObject)
+        {
+            var layer = LayerMask.NameToLayer("Ignore Raycast");
+            if (layer < 0)
+            {
+                return;
+            }
+
+            gameObject.layer = layer;
+        }
+
+        private static void DestroyCollider(GameObject gameObject)
+        {
+            var col = gameObject.GetComponent<Collider>();
+            if (col != null)
+            {
+                Destroy(col);
+            }
         }
 
         private Vector3 SquareToLocalPosition(BoardSquare square, float y)

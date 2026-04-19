@@ -1,11 +1,8 @@
 {
-  "name": "ChessVR.Runtime",
-  "rootNamespace": "ChessVR",
+  "name": "ChessVR.Contracts",
+  "rootNamespace": "ChessVR.Contracts",
   "references": [
-    "ChessVR.Domain",
-    "ChessVR.Contracts",
-    "UnityEngine.UI",
-    "Unity.InputSystem"
+    "ChessVR.Domain"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],
@@ -15,5 +12,5 @@
   "autoReferenced": true,
   "defineConstraints": [],
   "versionDefines": [],
-  "noEngineReferences": false
+  "noEngineReferences": true
 }
