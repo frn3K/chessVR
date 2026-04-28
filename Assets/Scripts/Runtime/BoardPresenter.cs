@@ -1,17 +1,26 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using ChessVR.Domain;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.Rendering;
+
 
 namespace ChessVR.Runtime
 {
     [DisallowMultipleComponent]
     public sealed class BoardPresenter : MonoBehaviour
     {
+        [Serializable]
+        private struct PiecePrefabSet
+        {
+            public PieceType pieceType;
+            public GameObject whitePrefab;
+            public GameObject blackPrefab;
+        }
+
         [Header("Dependencies")]
         [SerializeField] private ChessGameController gameController;
 
@@ -28,12 +37,24 @@ namespace ChessVR.Runtime
         [SerializeField] private Color whitePieceColor = new(0.92f, 0.92f, 0.9f, 1f);
         [SerializeField] private Color blackPieceColor = new(0.16f, 0.16f, 0.18f, 1f);
 
+        [Header("Piece prefabs (optional)")]
+        [SerializeField] private PiecePrefabSet[] piecePrefabs;
+        [SerializeField] private float piecePrefabScale = 1f;
+        [SerializeField] private float promotionChoiceScale = 0.8f;
+
         [Header("Runtime")]
         [SerializeField] private bool rebuildOnStart = true;
 
         [Header("Legal move highlights")]
         [SerializeField] private Color legalMoveHighlightColor = new(0.15f, 0.75f, 0.35f, 1f);
         [SerializeField] private float highlightHeightOffset = 0.05f;
+
+        [Header("VR grab & drop")]
+        [Tooltip("Maksymalna odleglosc od srodka pola (lokalne XZ), zeby uznac drop za trafiony.")]
+        [SerializeField] private float dropSquareSnapRadius = 0.18f;
+
+        [Header("Feedback")]
+        [SerializeField] private Color statusTextColor = new(0.95f, 0.95f, 0.95f, 1f);
 
         [Tooltip("Promień dopasowania figury do pola (przestrzeń lokalna PiecesRoot), w jednostkach świata lokalnego — duży = ręczne ustawienia.")]
         [SerializeField] private float pieceSquareMatchRadius = 0.9f;
@@ -45,7 +66,11 @@ namespace ChessVR.Runtime
         private Transform _boardRoot;
         private Transform _piecesRoot;
         private Transform _highlightsRoot;
+        private Transform _promotionChoicesRoot;
         private BoardSquare? _selectedSquare;
+        private readonly List<ChessMove> _selectedMoves = new();
+        private readonly List<ChessMove> _pendingPromotionMoves = new();
+        private TextMesh _statusText;
 
         private void Awake()
         {
@@ -63,30 +88,14 @@ namespace ChessVR.Runtime
             {
                 EnsureDependencies();
                 EnsureRoots();
+                EnsureSquareViewsForBoardUnderRoot();
                 EnsurePieceViewsForPiecesUnderRoot();
                 if (fixPieceCollidersOnStart)
                 {
                     FixPieceCollidersUnderRoot();
                 }
-            }
-        }
 
-        private void Update()
-        {
-            if (Mouse.current == null || !Mouse.current.leftButton.wasPressedThisFrame)
-            {
-                return;
-            }
-
-            var es = EventSystem.current;
-            if (es == null)
-            {
-                return;
-            }
-
-            if (es.IsPointerOverGameObject(-1) || es.IsPointerOverGameObject(0))
-            {
-                Debug.Log("KLIK ZABLOKOWANY PRZEZ UI");
+                UpdateStatusIndicator();
             }
         }
 
@@ -101,12 +110,15 @@ namespace ChessVR.Runtime
             ClearChildren(_piecesRoot);
 
             BuildBoard();
+            EnsureSquareViewsForBoardUnderRoot();
             BuildPieces();
             EnsurePieceViewsForPiecesUnderRoot();
             if (fixPieceCollidersOnStart)
             {
                 FixPieceCollidersUnderRoot();
             }
+
+            UpdateStatusIndicator();
         }
 
         [ContextMenu("Fix Piece Colliders (Box fit to renderers)")]
@@ -172,6 +184,54 @@ namespace ChessVR.Runtime
             }
         }
 
+        private void EnsureRootCollider(GameObject root)
+        {
+            if (root == null || root.GetComponent<Collider>() != null)
+            {
+                return;
+            }
+
+            if (!TryGetCombinedWorldBounds(root.transform, out var worldBounds))
+            {
+                return;
+            }
+
+            var box = root.AddComponent<BoxCollider>();
+            box.center = root.transform.InverseTransformPoint(worldBounds.center);
+
+            var lossy = root.transform.lossyScale;
+            var sx = Mathf.Abs(lossy.x) < 1e-5f ? 1f : Mathf.Abs(lossy.x);
+            var sy = Mathf.Abs(lossy.y) < 1e-5f ? 1f : Mathf.Abs(lossy.y);
+            var sz = Mathf.Abs(lossy.z) < 1e-5f ? 1f : Mathf.Abs(lossy.z);
+            box.size = new Vector3(worldBounds.size.x / sx, worldBounds.size.y / sy, worldBounds.size.z / sz);
+        }
+
+        private static void StripPieceInteractionComponents(GameObject root)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            var pieceView = root.GetComponent<PieceView>();
+            if (pieceView != null)
+            {
+                Destroy(pieceView);
+            }
+
+            var grab = root.GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+            if (grab != null)
+            {
+                Destroy(grab);
+            }
+
+            var body = root.GetComponent<Rigidbody>();
+            if (body != null)
+            {
+                Destroy(body);
+            }
+        }
+
         private static void RemoveCapsuleColliders(Transform root)
         {
             var capsules = root.GetComponentsInChildren<CapsuleCollider>(true);
@@ -213,8 +273,7 @@ namespace ChessVR.Runtime
         }
 
         /// <summary>
-        /// Dla każdego collidera pod <see cref="_piecesRoot"/> dopina <see cref="PieceView"/> i odświeża referencje
-        /// (klik trafia w obiekt z colliderem — często mesh dziecka, nie korzeń figury).
+        /// Dla każdej figury pod <see cref="_piecesRoot"/> dopina <see cref="PieceView"/> i odświeża referencje.
         /// </summary>
         public void EnsurePieceViewsForPiecesUnderRoot()
         {
@@ -227,53 +286,35 @@ namespace ChessVR.Runtime
                 return;
             }
 
-            var colliders = _piecesRoot.GetComponentsInChildren<Collider>(true);
-            for (var i = 0; i < colliders.Length; i++)
+            for (var i = 0; i < _piecesRoot.childCount; i++)
             {
-                var col = colliders[i];
-                if (col == null || !col.enabled || col.isTrigger)
-                {
-                    continue;
-                }
-
-                var pieceRoot = FindPieceRootUnderPiecesRoot(col.transform);
+                var pieceRoot = _piecesRoot.GetChild(i);
                 if (pieceRoot == null)
                 {
-                    Debug.Log($"Nie dopasowano obiektu {col.gameObject.name}");
                     continue;
                 }
 
-                var matchPosition = _piecesRoot.InverseTransformPoint(col.bounds.center);
+                var matchPosition = _piecesRoot.InverseTransformPoint(pieceRoot.position);
+                if (TryGetCombinedWorldBounds(pieceRoot, out var worldBounds))
+                {
+                    matchPosition = _piecesRoot.InverseTransformPoint(worldBounds.center);
+                }
+
                 if (!TryMatchPieceAtSquareFromLocalPosition(matchPosition, board, out var square, out var piece))
                 {
-                    Debug.Log(
-                        $"Nie dopasowano obiektu {col.gameObject.name} (środek collidera w lokalnym układzie PiecesRoot: X={matchPosition.x:F3}, Z={matchPosition.z:F3})");
+                    Debug.LogWarning(
+                        $"Nie dopasowano obiektu {pieceRoot.gameObject.name} (środek w lokalnym układzie PiecesRoot: X={matchPosition.x:F3}, Z={matchPosition.z:F3})");
                     continue;
                 }
 
-                Debug.Log(
-                    $"Znalazłem obiekt {col.gameObject.name} na pozycji [{matchPosition.x:F3}, {matchPosition.z:F3}], przypisuję go do pola [{square}]");
-
-                var host = col.gameObject;
-                var view = host.GetComponent<PieceView>();
+                var view = pieceRoot.GetComponent<PieceView>();
                 if (view == null)
                 {
-                    view = host.AddComponent<PieceView>();
+                    view = pieceRoot.gameObject.AddComponent<PieceView>();
                 }
 
                 view.Apply(piece, square, gameController, this);
             }
-        }
-
-        private Transform FindPieceRootUnderPiecesRoot(Transform t)
-        {
-            var current = t;
-            while (current != null && current.parent != _piecesRoot)
-            {
-                current = current.parent;
-            }
-
-            return current != null && current.parent == _piecesRoot ? current : null;
         }
 
         /// <summary>
@@ -346,7 +387,6 @@ namespace ChessVR.Runtime
                 module.UnassignActions();
                 module.AssignDefaultActions();
                 module.enabled = wasEnabled;
-                Debug.Log("EventSystem: Domyślne akcje wejścia zostały przypisane.");
             }
 
             TryEnableBuiltinActionsAsFallback(module);
@@ -405,15 +445,165 @@ namespace ChessVR.Runtime
             return _selectedSquare.HasValue && _selectedSquare.Value.Equals(square);
         }
 
-        public void ClearLegalMoveHighlights()
+        public bool TryHandleSquareInteraction(BoardSquare square, bool clearOnInvalidDestination)
         {
-            _selectedSquare = null;
-            if (_highlightsRoot == null)
+            return TryHandleSquareInteraction(square, clearOnInvalidDestination, out _);
+        }
+
+        public bool TryHandleSquareInteraction(BoardSquare square, bool clearOnInvalidDestination, out bool moveApplied)
+        {
+            moveApplied = false;
+            EnsureDependencies();
+
+            if (_pendingPromotionMoves.Count > 0)
+            {
+                ClearLegalMoveHighlights();
+                return true;
+            }
+
+            if (!_selectedSquare.HasValue)
+            {
+                return false;
+            }
+
+            if (_selectedSquare.Value.Equals(square))
+            {
+                ClearLegalMoveHighlights();
+                return true;
+            }
+
+            if (TryGetSelectedMove(square, out var move))
+            {
+                moveApplied = TryExecuteSelectedMove(move);
+                return moveApplied;
+            }
+
+            if (_pendingPromotionMoves.Count > 0)
+            {
+                return true;
+            }
+
+            if (clearOnInvalidDestination)
+            {
+                ClearLegalMoveHighlights();
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool TryChoosePromotion(PieceType promotionPiece)
+        {
+            if (_pendingPromotionMoves.Count == 0)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < _pendingPromotionMoves.Count; i++)
+            {
+                if (_pendingPromotionMoves[i].Promotion == promotionPiece)
+                {
+                    return TryExecuteSelectedMove(_pendingPromotionMoves[i]);
+                }
+            }
+
+            return false;
+        }
+
+        public void HandlePieceGrabStarted(PieceView pieceView)
+        {
+            EnsureDependencies();
+
+            if (pieceView == null || gameController.CurrentBoard == null)
             {
                 return;
             }
 
+            if (_pendingPromotionMoves.Count > 0)
+            {
+                return;
+            }
+
+            if (!TryGetSquareFromWorldPosition(pieceView.transform.position, out var currentSquare))
+            {
+                return;
+            }
+
+            if (!pieceView.Square.Equals(currentSquare))
+            {
+                pieceView.UpdateSquare(currentSquare);
+            }
+
+            var board = gameController.CurrentBoard;
+            var occupant = board.GetPiece(currentSquare);
+            if (occupant.IsNone || occupant.Color != board.SideToMove)
+            {
+                return;
+            }
+
+            var legalMoves = gameController.GetLegalMovesFrom(currentSquare);
+            ShowLegalMoveHighlights(currentSquare, legalMoves);
+        }
+
+        public void HandlePieceGrabEnded(PieceView pieceView)
+        {
+            EnsureDependencies();
+            EnsureRoots();
+
+            if (pieceView == null)
+            {
+                return;
+            }
+
+            if (_pendingPromotionMoves.Count > 0)
+            {
+                pieceView.SnapBackToGrabStart();
+                return;
+            }
+
+            if (!_selectedSquare.HasValue || !_selectedSquare.Value.Equals(pieceView.Square))
+            {
+                pieceView.SnapBackToGrabStart();
+                return;
+            }
+
+            if (!TryGetSquareFromWorldPosition(pieceView.transform.position, out var targetSquare))
+            {
+                pieceView.SnapBackToGrabStart();
+                ClearLegalMoveHighlights();
+                return;
+            }
+
+            if (_piecesRoot != null && pieceView.transform.parent != _piecesRoot)
+            {
+                pieceView.transform.SetParent(_piecesRoot, true);
+            }
+
+            var handled = TryHandleSquareInteraction(targetSquare, clearOnInvalidDestination: true, out var moveApplied);
+            if (!handled || !moveApplied)
+            {
+                pieceView.SnapBackToGrabStart();
+            }
+        }
+
+        public void ClearLegalMoveHighlights()
+        {
+            _selectedSquare = null;
+            _selectedMoves.Clear();
+            _pendingPromotionMoves.Clear();
+            if (_highlightsRoot == null)
+            {
+                UpdateStatusIndicator();
+                return;
+            }
+
             ClearChildren(_highlightsRoot);
+            if (_promotionChoicesRoot != null)
+            {
+                ClearChildren(_promotionChoicesRoot);
+            }
+
+            UpdateStatusIndicator();
         }
 
         /// <summary>Rysuje płaskie znaczniki na polach docelowych; lista ruchów pochodzi z <see cref="ChessGameController.GetLegalMovesFrom"/> (adapter zasad).</summary>
@@ -426,9 +616,11 @@ namespace ChessVR.Runtime
 
             if (legalMoves == null || legalMoves.Count == 0)
             {
+                UpdateStatusIndicator();
                 return;
             }
 
+            _selectedMoves.AddRange(legalMoves);
             var seen = new HashSet<BoardSquare>();
             for (var i = 0; i < legalMoves.Count; i++)
             {
@@ -448,6 +640,8 @@ namespace ChessVR.Runtime
                 Tint(marker, legalMoveHighlightColor);
                 DestroyCollider(marker);
             }
+
+            UpdateStatusIndicator();
         }
 
         private void EnsureDependencies()
@@ -473,6 +667,8 @@ namespace ChessVR.Runtime
             _boardRoot = FindOrCreateChild("BoardRoot");
             _piecesRoot = FindOrCreateChild("PiecesRoot");
             _highlightsRoot = FindOrCreateChild("LegalHighlightsRoot");
+            _promotionChoicesRoot = FindOrCreateChild("PromotionChoicesRoot");
+            EnsureStatusIndicator();
         }
 
         private Transform FindOrCreateChild(string childName)
@@ -486,6 +682,45 @@ namespace ChessVR.Runtime
             var child = new GameObject(childName);
             child.transform.SetParent(transform, false);
             return child.transform;
+        }
+
+        private void EnsureStatusIndicator()
+        {
+            var statusRoot = FindOrCreateChild("StatusTextRoot");
+            _statusText = statusRoot.GetComponent<TextMesh>();
+            if (_statusText == null)
+            {
+                _statusText = statusRoot.gameObject.AddComponent<TextMesh>();
+            }
+
+            statusRoot.transform.localPosition = new Vector3(0f, boardHeight + 0.72f, -(squareSize * 6.2f));
+            statusRoot.transform.localRotation = Quaternion.identity;
+            statusRoot.transform.localScale = Vector3.one * 0.08f;
+
+            _statusText.anchor = TextAnchor.MiddleCenter;
+            _statusText.alignment = TextAlignment.Center;
+            _statusText.fontSize = 48;
+            _statusText.characterSize = 0.1f;
+            _statusText.color = statusTextColor;
+        }
+
+        private void EnsureSquareViewsForBoardUnderRoot()
+        {
+            if (_boardRoot == null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < _boardRoot.childCount; i++)
+            {
+                var boardChild = _boardRoot.GetChild(i);
+                if (!TryParseSquareName(boardChild.name, out var square))
+                {
+                    continue;
+                }
+
+                AttachOrRefreshSquareView(boardChild.gameObject, square);
+            }
         }
 
         private void BuildBoard()
@@ -513,12 +748,14 @@ namespace ChessVR.Runtime
             {
                 for (var file = 0; file < 8; file++)
                 {
+                    var boardSquare = new BoardSquare(file, rank);
                     var square = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     square.name = $"Square_{(char)('A' + file)}{rank + 1}";
                     square.transform.SetParent(_boardRoot, false);
-                    square.transform.localPosition = SquareToLocalPosition(new BoardSquare(file, rank), boardHeight);
+                    square.transform.localPosition = SquareToLocalPosition(boardSquare, boardHeight);
                     square.transform.localScale = new Vector3(squareSize, boardThickness * 0.5f, squareSize);
                     Tint(square, ((file + rank) % 2 == 0) ? lightSquareColor : darkSquareColor);
+                    AttachOrRefreshSquareView(square, boardSquare);
                 }
             }
         }
@@ -541,22 +778,113 @@ namespace ChessVR.Runtime
 
         private void CreatePieceView(BoardSquare square, Piece piece)
         {
-            var root = CreatePrimitiveForPiece(piece.Type);
+            var root = CreateVisualForPiece(piece, 1f, out var usedPrefab);
             root.transform.SetParent(_piecesRoot, false);
             root.transform.localPosition = PieceLocalPosition(square, piece.Type);
-            Tint(root, piece.Color == PieceColor.White ? whitePieceColor : blackPieceColor);
+            EnsureRootCollider(root);
+
+            if (!usedPrefab)
+            {
+                Tint(root, piece.Color == PieceColor.White ? whitePieceColor : blackPieceColor);
+            }
 
             AttachOrRefreshPieceView(root, square, piece);
 
-            if (piece.Type == PieceType.King)
+            if (!usedPrefab && piece.Type == PieceType.King)
             {
                 AddKingCrown(root.transform, piece.Color);
             }
 
-            if (piece.Type == PieceType.Queen)
+            if (!usedPrefab && piece.Type == PieceType.Queen)
             {
                 AddQueenTop(root.transform, piece.Color);
             }
+        }
+
+        private GameObject CreateVisualForPiece(Piece piece, float scaleMultiplier, out bool usedPrefab)
+        {
+            if (TryGetPiecePrefab(piece.Type, piece.Color, out var prefab))
+            {
+                var instance = Instantiate(prefab);
+                var targetScale = piecePrefabScale <= 0f ? 1f : piecePrefabScale;
+                var multiplier = scaleMultiplier <= 0f ? 1f : scaleMultiplier;
+                ApplyPrefabScale(instance.transform, targetScale * multiplier);
+                usedPrefab = true;
+                return instance;
+            }
+
+            if (TryGetPieceTemplate(piece, out var template))
+            {
+                var instance = Instantiate(template);
+                var multiplier = scaleMultiplier <= 0f ? 1f : scaleMultiplier;
+                ApplyPrefabScale(instance.transform, multiplier);
+                usedPrefab = true;
+                return instance;
+            }
+
+            usedPrefab = false;
+            var root = CreatePrimitiveForPiece(piece.Type);
+            ApplyPrefabScale(root.transform, scaleMultiplier);
+            return root;
+        }
+
+        private static void ApplyPrefabScale(Transform target, float scaleFactor)
+        {
+            if (Mathf.Abs(scaleFactor - 1f) < 0.0001f)
+            {
+                return;
+            }
+
+            target.localScale *= scaleFactor;
+        }
+
+        private bool TryGetPiecePrefab(PieceType pieceType, PieceColor pieceColor, out GameObject prefab)
+        {
+            prefab = null;
+            if (piecePrefabs == null)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < piecePrefabs.Length; i++)
+            {
+                if (piecePrefabs[i].pieceType != pieceType)
+                {
+                    continue;
+                }
+
+                prefab = pieceColor == PieceColor.White ? piecePrefabs[i].whitePrefab : piecePrefabs[i].blackPrefab;
+                return prefab != null;
+            }
+
+            return false;
+        }
+
+        private bool TryGetPieceTemplate(Piece piece, out GameObject template)
+        {
+            template = null;
+            if (_piecesRoot == null)
+            {
+                return false;
+            }
+
+            var pieceViews = _piecesRoot.GetComponentsInChildren<PieceView>(true);
+            for (var i = 0; i < pieceViews.Length; i++)
+            {
+                var view = pieceViews[i];
+                if (view == null)
+                {
+                    continue;
+                }
+
+                if (view.PieceType == piece.Type && view.PieceColor == piece.Color)
+                {
+                    template = view.gameObject;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private GameObject CreatePrimitiveForPiece(PieceType pieceType)
@@ -610,6 +938,28 @@ namespace ChessVR.Runtime
             }
 
             view.Apply(piece, square, gameController, this);
+        }
+
+        private void AttachOrRefreshSquareView(GameObject root, BoardSquare square)
+        {
+            var view = root.GetComponent<BoardSquareView>();
+            if (view == null)
+            {
+                view = root.AddComponent<BoardSquareView>();
+            }
+
+            view.Apply(square, this);
+        }
+
+        private void AttachOrRefreshPromotionChoiceView(GameObject root, PieceType promotionPiece)
+        {
+            var view = root.GetComponent<PromotionChoiceView>();
+            if (view == null)
+            {
+                view = root.AddComponent<PromotionChoiceView>();
+            }
+
+            view.Apply(promotionPiece, this);
         }
 
         private void AddQueenTop(Transform parent, PieceColor color)
@@ -670,6 +1020,39 @@ namespace ChessVR.Runtime
             return new Vector3(x, y, z);
         }
 
+        private bool TryGetSquareFromWorldPosition(Vector3 worldPosition, out BoardSquare square)
+        {
+            square = default;
+            if (_piecesRoot == null)
+            {
+                return false;
+            }
+
+            var local = _piecesRoot.InverseTransformPoint(worldPosition);
+            var boardOffset = squareSize * 3.5f;
+            var file = Mathf.RoundToInt((local.x + boardOffset) / squareSize);
+            var rank = Mathf.RoundToInt((local.z + boardOffset) / squareSize);
+
+            if (file < 0 || file > 7 || rank < 0 || rank > 7)
+            {
+                return false;
+            }
+
+            var centerX = (file * squareSize) - boardOffset;
+            var centerZ = (rank * squareSize) - boardOffset;
+            var dx = local.x - centerX;
+            var dz = local.z - centerZ;
+            var maxDistance = dropSquareSnapRadius > 0f ? dropSquareSnapRadius : squareSize * 0.45f;
+
+            if ((dx * dx) + (dz * dz) > maxDistance * maxDistance)
+            {
+                return false;
+            }
+
+            square = new BoardSquare(file, rank);
+            return true;
+        }
+
         private Vector3 PieceLocalPosition(BoardSquare square, PieceType pieceType)
         {
             var basePosition = SquareToLocalPosition(square, boardHeight + 0.03f);
@@ -686,6 +1069,290 @@ namespace ChessVR.Runtime
 
             basePosition.y += yOffset;
             return basePosition;
+        }
+
+        private bool TryGetSelectedMove(BoardSquare square, out ChessMove move)
+        {
+            var matchingMoves = new List<ChessMove>(4);
+            for (var i = 0; i < _selectedMoves.Count; i++)
+            {
+                if (_selectedMoves[i].To.Equals(square))
+                {
+                    matchingMoves.Add(_selectedMoves[i]);
+                }
+            }
+
+            if (matchingMoves.Count == 0)
+            {
+                move = default;
+                return false;
+            }
+
+            if (matchingMoves.Count == 1)
+            {
+                move = matchingMoves[0];
+                return true;
+            }
+
+            ShowPromotionChoices(matchingMoves);
+            move = default;
+            return false;
+        }
+
+        private void ShowPromotionChoices(IReadOnlyList<ChessMove> promotionMoves)
+        {
+            if (promotionMoves == null || promotionMoves.Count == 0 || _promotionChoicesRoot == null)
+            {
+                return;
+            }
+
+            _pendingPromotionMoves.Clear();
+            ClearChildren(_promotionChoicesRoot);
+            for (var i = 0; i < promotionMoves.Count; i++)
+            {
+                _pendingPromotionMoves.Add(promotionMoves[i]);
+            }
+
+            var move = promotionMoves[0];
+            var movingPiece = gameController.CurrentBoard.GetPiece(move.From);
+            var basePosition = SquareToLocalPosition(move.To, boardHeight + 0.16f);
+            var startOffset = -((promotionMoves.Count - 1) * 0.5f);
+
+            for (var i = 0; i < promotionMoves.Count; i++)
+            {
+                var choiceRoot = CreatePromotionChoiceVisual(promotionMoves[i].Promotion, movingPiece.Color);
+                choiceRoot.name = $"PromotionChoice_{promotionMoves[i].Promotion}";
+                choiceRoot.transform.SetParent(_promotionChoicesRoot, false);
+                choiceRoot.transform.localPosition = basePosition + new Vector3((startOffset + i) * squareSize * 0.65f, 0f, squareSize * 0.95f);
+                AttachOrRefreshPromotionChoiceView(choiceRoot, promotionMoves[i].Promotion);
+            }
+
+            UpdateStatusIndicator();
+        }
+
+        private GameObject CreatePromotionChoiceVisual(PieceType promotionPiece, PieceColor color)
+        {
+            var root = CreateVisualForPiece(new Piece(promotionPiece, color), promotionChoiceScale, out var usedPrefab);
+            EnsureRootCollider(root);
+            StripPieceInteractionComponents(root);
+
+            if (!usedPrefab)
+            {
+                Tint(root, color == PieceColor.White ? whitePieceColor : blackPieceColor);
+
+                if (promotionPiece == PieceType.King)
+                {
+                    AddKingCrown(root.transform, color);
+                }
+                else if (promotionPiece == PieceType.Queen)
+                {
+                    AddQueenTop(root.transform, color);
+                }
+            }
+
+            return root;
+        }
+
+        private bool TryExecuteSelectedMove(ChessMove move)
+        {
+            var board = gameController.CurrentBoard;
+            if (board == null)
+            {
+                return false;
+            }
+
+            var movingPiece = board.GetPiece(move.From);
+            if (movingPiece.IsNone || !TryGetPieceViewAt(move.From, out var movingView))
+            {
+                ClearLegalMoveHighlights();
+                return false;
+            }
+
+            var targetPiece = board.GetPiece(move.To);
+            if (!gameController.TryMakeMove(move))
+            {
+                return false;
+            }
+
+            HandleCaptureVisuals(move, movingPiece, targetPiece);
+            HandleCastlingVisualMove(move, movingPiece);
+            UpdateMovedPieceVisual(movingView, move, movingPiece, board.GetPiece(move.To));
+            ClearLegalMoveHighlights();
+            UpdateStatusIndicator();
+            return true;
+        }
+
+        private void UpdateMovedPieceVisual(PieceView movingView, ChessMove move, Piece movingPiece, Piece resultingPiece)
+        {
+            if (movingPiece.Type == resultingPiece.Type)
+            {
+                MovePieceVisual(movingView, move.To);
+                return;
+            }
+
+            Destroy(movingView.gameObject);
+            CreatePieceView(move.To, resultingPiece);
+        }
+
+        private void HandleCaptureVisuals(ChessMove move, Piece movingPiece, Piece targetPiece)
+        {
+            if (movingPiece.Type == PieceType.Pawn &&
+                move.From.File != move.To.File &&
+                targetPiece.IsNone)
+            {
+                var captureRankOffset = movingPiece.Color == PieceColor.White ? -1 : 1;
+                var capturedPawnSquare = new BoardSquare(move.To.File, move.To.Rank + captureRankOffset);
+                TryDestroyPieceAt(capturedPawnSquare);
+                return;
+            }
+
+            if (!targetPiece.IsNone)
+            {
+                TryDestroyPieceAt(move.To);
+            }
+        }
+
+        private void HandleCastlingVisualMove(ChessMove move, Piece movingPiece)
+        {
+            if (movingPiece.Type != PieceType.King || Math.Abs(move.To.File - move.From.File) != 2)
+            {
+                return;
+            }
+
+            var isKingside = move.To.File > move.From.File;
+            var rookFrom = new BoardSquare(isKingside ? 7 : 0, move.From.Rank);
+            var rookTo = new BoardSquare(isKingside ? 5 : 3, move.From.Rank);
+            if (TryGetPieceViewAt(rookFrom, out var rookView))
+            {
+                MovePieceVisual(rookView, rookTo);
+            }
+        }
+
+        private void MovePieceVisual(PieceView pieceView, BoardSquare square)
+        {
+            var currentPosition = pieceView.transform.localPosition;
+            pieceView.transform.localPosition = SquareToLocalPosition(square, currentPosition.y);
+            pieceView.UpdateSquare(square);
+            pieceView.RestoreRotation();
+        }
+
+        private bool TryDestroyPieceAt(BoardSquare square)
+        {
+            if (!TryGetPieceViewAt(square, out var pieceView))
+            {
+                return false;
+            }
+
+            Destroy(pieceView.gameObject);
+            return true;
+        }
+
+        private bool TryGetPieceViewAt(BoardSquare square, out PieceView pieceView)
+        {
+            pieceView = null;
+            if (_piecesRoot == null)
+            {
+                return false;
+            }
+
+            var pieceViews = _piecesRoot.GetComponentsInChildren<PieceView>(true);
+            for (var i = 0; i < pieceViews.Length; i++)
+            {
+                var view = pieceViews[i];
+                if (view != null && view.Square.Equals(square))
+                {
+                    pieceView = view;
+                    return true;
+                }
+            }
+
+            var boardOffset = squareSize * 3.5f;
+            var targetX = (square.File * squareSize) - boardOffset;
+            var targetZ = (square.Rank * squareSize) - boardOffset;
+            var maxDistance = Mathf.Max(squareSize * 0.45f, 0.001f);
+            var bestDistanceSq = maxDistance * maxDistance;
+
+            for (var i = 0; i < pieceViews.Length; i++)
+            {
+                var view = pieceViews[i];
+                if (view == null)
+                {
+                    continue;
+                }
+
+                var localPosition = _piecesRoot.InverseTransformPoint(view.transform.position);
+                var dx = localPosition.x - targetX;
+                var dz = localPosition.z - targetZ;
+                var distSq = dx * dx + dz * dz;
+                if (distSq <= bestDistanceSq)
+                {
+                    bestDistanceSq = distSq;
+                    pieceView = view;
+                }
+            }
+
+            if (pieceView != null && !pieceView.Square.Equals(square))
+            {
+                pieceView.UpdateSquare(square);
+            }
+
+            return pieceView != null;
+        }
+
+        private static bool TryParseSquareName(string objectName, out BoardSquare square)
+        {
+            const string prefix = "Square_";
+            if (!objectName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                square = default;
+                return false;
+            }
+
+            return BoardSquare.TryParse(objectName.Substring(prefix.Length), out square);
+        }
+
+        private void UpdateStatusIndicator()
+        {
+            if (_statusText == null)
+            {
+                return;
+            }
+
+            var board = gameController != null ? gameController.CurrentBoard : null;
+            if (board == null)
+            {
+                _statusText.text = string.Empty;
+                return;
+            }
+
+            if (_pendingPromotionMoves.Count > 0)
+            {
+                var movingSide = board.SideToMove == PieceColor.White ? "White" : "Black";
+                _statusText.text = $"{movingSide}: choose promotion";
+                return;
+            }
+
+            if (board.IsCheckmate(board.SideToMove))
+            {
+                var winner = board.SideToMove == PieceColor.White ? "Black" : "White";
+                _statusText.text = $"Checkmate. {winner} wins";
+                return;
+            }
+
+            if (board.IsStalemate(board.SideToMove))
+            {
+                _statusText.text = "Stalemate";
+                return;
+            }
+
+            var sideToMove = board.SideToMove == PieceColor.White ? "White" : "Black";
+            if (board.IsInCheck(board.SideToMove))
+            {
+                _statusText.text = $"{sideToMove} to move - check";
+                return;
+            }
+
+            _statusText.text = $"{sideToMove} to move";
         }
 
         private static void ClearChildren(Transform root)
