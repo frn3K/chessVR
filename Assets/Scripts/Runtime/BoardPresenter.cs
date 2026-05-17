@@ -51,7 +51,7 @@ namespace ChessVR.Runtime
 
         [Header("VR grab & drop")]
         [Tooltip("Maksymalna odleglosc od srodka pola (lokalne XZ), zeby uznac drop za trafiony.")]
-        [SerializeField] private float dropSquareSnapRadius = 0.18f;
+        [SerializeField] private float dropSquareSnapRadius = 0.28f;
 
         [Header("Feedback")]
         [SerializeField] private Color statusTextColor = new(0.95f, 0.95f, 0.95f, 1f);
@@ -62,6 +62,10 @@ namespace ChessVR.Runtime
         [Header("Collider fix (for manually scaled pieces)")]
         [Tooltip("Jeśli figury są ręcznie skalowane (np. skala 25), BoxCollider będzie dopasowany do rendererów.")]
         [SerializeField] private bool fixPieceCollidersOnStart = true;
+
+        [Header("Game Over UI")]
+        [Tooltip("Opcjonalny GameUIManager do wyświetlania panelu końca gry (mat/pat/remis).")]
+        [SerializeField] private GameUIManager gameUIManager;
 
         private Transform _boardRoot;
         private Transform _piecesRoot;
@@ -96,6 +100,7 @@ namespace ChessVR.Runtime
                 }
 
                 UpdateStatusIndicator();
+                UpdateAllPiecesInteractability();
             }
         }
 
@@ -105,6 +110,7 @@ namespace ChessVR.Runtime
             EnsureDependencies();
             EnsureRoots();
 
+            gameUIManager?.HideGameOver();
             ClearLegalMoveHighlights();
             ClearChildren(_boardRoot);
             ClearChildren(_piecesRoot);
@@ -119,6 +125,7 @@ namespace ChessVR.Runtime
             }
 
             UpdateStatusIndicator();
+            UpdateAllPiecesInteractability();
         }
 
         [ContextMenu("Fix Piece Colliders (Box fit to renderers)")]
@@ -524,28 +531,30 @@ namespace ChessVR.Runtime
                 return;
             }
 
-            if (!TryGetSquareFromWorldPosition(pieceView.transform.position, out var currentSquare))
+            var currentBoard = gameController.CurrentBoard;
+            if (currentBoard.IsCheckmate(currentBoard.SideToMove) || currentBoard.IsStalemate(currentBoard.SideToMove))
             {
                 return;
             }
 
-            if (!pieceView.Square.Equals(currentSquare))
-            {
-                pieceView.UpdateSquare(currentSquare);
-            }
-
-            var board = gameController.CurrentBoard;
-            var occupant = board.GetPiece(currentSquare);
-            if (occupant.IsNone || occupant.Color != board.SideToMove)
+            // Use the stored square directly — same approach as the mouse click path.
+            // Mapping from world position is unreliable at grab start (dynamic attach, hand offset).
+            var square = pieceView.Square;
+            var occupant = currentBoard.GetPiece(square);
+            if (occupant.IsNone || occupant.Color != currentBoard.SideToMove)
             {
                 return;
             }
 
-            var legalMoves = gameController.GetLegalMovesFrom(currentSquare);
-            ShowLegalMoveHighlights(currentSquare, legalMoves);
+            var legalMoves = gameController.GetLegalMovesFrom(square);
+            ShowLegalMoveHighlights(square, legalMoves);
         }
 
-        public void HandlePieceGrabEnded(PieceView pieceView)
+        /// <param name="dropWorldPosition">
+        /// World position of the piece captured at the instant <c>selectExited</c> fired —
+        /// before the XR system can move or reparent the transform during release processing.
+        /// </param>
+        public void HandlePieceGrabEnded(PieceView pieceView, Vector3 dropWorldPosition)
         {
             EnsureDependencies();
             EnsureRoots();
@@ -555,7 +564,22 @@ namespace ChessVR.Runtime
                 return;
             }
 
+            // Reparent to PiecesRoot so SnapBackToGrabStart / localPosition assignments
+            // work in the correct coordinate space. worldPositionStays keeps the world
+            // position intact (we already captured it in dropWorldPosition above).
+            if (_piecesRoot != null && pieceView.transform.parent != _piecesRoot)
+            {
+                pieceView.transform.SetParent(_piecesRoot, worldPositionStays: true);
+            }
+
             if (_pendingPromotionMoves.Count > 0)
+            {
+                pieceView.SnapBackToGrabStart();
+                return;
+            }
+
+            var board = gameController?.CurrentBoard;
+            if (board != null && (board.IsCheckmate(board.SideToMove) || board.IsStalemate(board.SideToMove)))
             {
                 pieceView.SnapBackToGrabStart();
                 return;
@@ -567,16 +591,13 @@ namespace ChessVR.Runtime
                 return;
             }
 
-            if (!TryGetSquareFromWorldPosition(pieceView.transform.position, out var targetSquare))
+            // Use the pre-captured world position to find the target square —
+            // same flow as TryHandleSquareInteraction called by the mouse/click path.
+            if (!TryGetSquareFromWorldPosition(dropWorldPosition, out var targetSquare))
             {
                 pieceView.SnapBackToGrabStart();
                 ClearLegalMoveHighlights();
                 return;
-            }
-
-            if (_piecesRoot != null && pieceView.transform.parent != _piecesRoot)
-            {
-                pieceView.transform.SetParent(_piecesRoot, true);
             }
 
             var handled = TryHandleSquareInteraction(targetSquare, clearOnInvalidDestination: true, out var moveApplied);
@@ -780,7 +801,19 @@ namespace ChessVR.Runtime
         {
             var root = CreateVisualForPiece(piece, 1f, out var usedPrefab);
             root.transform.SetParent(_piecesRoot, false);
-            root.transform.localPosition = PieceLocalPosition(square, piece.Type);
+
+            // Use the canonical rest-Y from an existing peer piece (same type & colour) so
+            // that promoted pieces land at the exact same height as the rest of the set.
+            // This matters especially when pieces were artist-placed (rebuildOnStart = false)
+            // or when PieceLocalPosition offsets don't match the prefab pivot height.
+            // Falls back to PieceLocalPosition when no peer exists yet (initial board build).
+            var spawnPosition = PieceLocalPosition(square, piece.Type);
+            if (TryGetPeerRestLocalY(piece, out var peerY))
+            {
+                spawnPosition.y = peerY;
+            }
+
+            root.transform.localPosition = spawnPosition;
             EnsureRootCollider(root);
 
             if (!usedPrefab)
@@ -799,6 +832,35 @@ namespace ChessVR.Runtime
             {
                 AddQueenTop(root.transform, piece.Color);
             }
+        }
+
+        /// <summary>
+        /// Returns the <see cref="PieceView.RestLocalY"/> of the first piece already in
+        /// <see cref="_piecesRoot"/> that shares <paramref name="piece"/>'s type and colour.
+        /// Used so that a newly spawned (or promoted) piece inherits the exact board-height
+        /// of its siblings rather than relying on the hard-coded <see cref="PieceLocalPosition"/>
+        /// offsets, which are calibrated for procedurally generated geometry.
+        /// </summary>
+        private bool TryGetPeerRestLocalY(Piece piece, out float restY)
+        {
+            restY = 0f;
+            if (_piecesRoot == null)
+            {
+                return false;
+            }
+
+            var views = _piecesRoot.GetComponentsInChildren<PieceView>(true);
+            for (var i = 0; i < views.Length; i++)
+            {
+                var v = views[i];
+                if (v != null && v.PieceType == piece.Type && v.PieceColor == piece.Color)
+                {
+                    restY = v.RestLocalY;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private GameObject CreateVisualForPiece(Piece piece, float scaleMultiplier, out bool usedPrefab)
@@ -1012,6 +1074,18 @@ namespace ChessVR.Runtime
             }
         }
 
+        /// <summary>
+        /// Returns the canonical local-space position (relative to PiecesRoot) for a piece
+        /// resting on <paramref name="square"/> at height <paramref name="restY"/>.
+        /// Used by <see cref="PieceView.SnapBackToGrabStart"/> to recompute the correct
+        /// position from first principles rather than trusting a transform snapshot that
+        /// may have been corrupted by XRI's dynamic-attach machinery.
+        /// </summary>
+        public Vector3 GetPieceRestLocalPosition(BoardSquare square, float restY)
+        {
+            return SquareToLocalPosition(square, restY);
+        }
+
         private Vector3 SquareToLocalPosition(BoardSquare square, float y)
         {
             var boardOffset = squareSize * 3.5f;
@@ -1020,15 +1094,27 @@ namespace ChessVR.Runtime
             return new Vector3(x, y, z);
         }
 
+        /// <summary>
+        /// Converts a world-space position to a board square by projecting it into the
+        /// coordinate space where the square tiles live (<see cref="_boardRoot"/>).
+        /// Using _boardRoot (not _piecesRoot) ensures the math is anchored to the
+        /// same reference frame used when placing the square GameObjects — identical to
+        /// the square index stored in every BoardSquareView, which is what the mouse/click
+        /// path uses.
+        /// </summary>
         private bool TryGetSquareFromWorldPosition(Vector3 worldPosition, out BoardSquare square)
         {
             square = default;
-            if (_piecesRoot == null)
-            {
-                return false;
-            }
 
-            var local = _piecesRoot.InverseTransformPoint(worldPosition);
+            // Prefer _boardRoot: squares are placed there and their stored indices match
+            // this coordinate space exactly. Fall back to _piecesRoot, then the presenter
+            // itself — all three should share the same world transform, but _boardRoot is
+            // the authoritative anchor.
+            var refTransform = _boardRoot != null ? _boardRoot
+                : _piecesRoot != null ? _piecesRoot
+                : transform;
+
+            var local = refTransform.InverseTransformPoint(worldPosition);
             var boardOffset = squareSize * 3.5f;
             var file = Mathf.RoundToInt((local.x + boardOffset) / squareSize);
             var rank = Mathf.RoundToInt((local.z + boardOffset) / squareSize);
@@ -1128,6 +1214,7 @@ namespace ChessVR.Runtime
             }
 
             UpdateStatusIndicator();
+            UpdateAllPiecesInteractability();
         }
 
         private GameObject CreatePromotionChoiceVisual(PieceType promotionPiece, PieceColor color)
@@ -1151,6 +1238,54 @@ namespace ChessVR.Runtime
             }
 
             return root;
+        }
+
+        /// <summary>
+        /// Enables XRGrabInteractable only on pieces that belong to the side to move AND
+        /// have at least one legal move. All other pieces are disabled so VR hands cannot
+        /// physically pick them up. Has no effect on the mouse/click path.
+        /// Called after every board state change (game start, move executed, promotion chosen).
+        /// </summary>
+        private void UpdateAllPiecesInteractability()
+        {
+            if (_piecesRoot == null)
+            {
+                return;
+            }
+
+            var board = gameController?.CurrentBoard;
+            var gameBlocked = board == null
+                || _pendingPromotionMoves.Count > 0
+                || board.IsCheckmate(board.SideToMove)
+                || board.IsStalemate(board.SideToMove);
+
+            var pieceViews = _piecesRoot.GetComponentsInChildren<PieceView>(true);
+            for (var i = 0; i < pieceViews.Length; i++)
+            {
+                var view = pieceViews[i];
+                if (view == null)
+                {
+                    continue;
+                }
+
+                if (gameBlocked)
+                {
+                    view.SetInteractable(false);
+                    continue;
+                }
+
+                var occupant = board.GetPiece(view.Square);
+                if (occupant.IsNone || occupant.Color != board.SideToMove)
+                {
+                    view.SetInteractable(false);
+                    continue;
+                }
+
+                // Only compute legal moves for pieces that pass the turn check —
+                // keeps the per-frame cost minimal (at most ~16 pieces per refresh).
+                var hasMoves = gameController.GetLegalMovesFrom(view.Square).Count > 0;
+                view.SetInteractable(hasMoves);
+            }
         }
 
         private bool TryExecuteSelectedMove(ChessMove move)
@@ -1179,6 +1314,8 @@ namespace ChessVR.Runtime
             UpdateMovedPieceVisual(movingView, move, movingPiece, board.GetPiece(move.To));
             ClearLegalMoveHighlights();
             UpdateStatusIndicator();
+            gameUIManager?.CheckAndShowIfGameOver(gameController.CurrentBoard);
+            UpdateAllPiecesInteractability();
             return true;
         }
 
@@ -1230,8 +1367,11 @@ namespace ChessVR.Runtime
 
         private void MovePieceVisual(PieceView pieceView, BoardSquare square)
         {
-            var currentPosition = pieceView.transform.localPosition;
-            pieceView.transform.localPosition = SquareToLocalPosition(square, currentPosition.y);
+            // RestLocalY is the Y captured at Apply() time (initial board placement).
+            // Using it here ensures the piece always lands flush with the board after
+            // a move regardless of whether the player was holding it in the air (VR)
+            // or clicking with the mouse, and regardless of prefab pivot offsets.
+            pieceView.transform.localPosition = SquareToLocalPosition(square, pieceView.RestLocalY);
             pieceView.UpdateSquare(square);
             pieceView.RestoreRotation();
         }

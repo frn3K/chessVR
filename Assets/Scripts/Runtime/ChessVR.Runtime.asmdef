@@ -5,6 +5,7 @@
     "ChessVR.Domain",
     "ChessVR.Contracts",
     "UnityEngine.UI",
+    "Unity.TextMeshPro",
     "Unity.InputSystem",
     "Unity.XR.Interaction.Toolkit"
   ],
