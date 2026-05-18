@@ -35,3 +35,6 @@ sysinfo.txt
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Generated handoff packages
+VR_Headset_Handoff/*.zip

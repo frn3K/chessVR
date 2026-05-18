@@ -138,7 +138,7 @@ namespace ChessVR.Runtime
             {
                 if (capsules[i] != null)
                 {
-                    Destroy(capsules[i]);
+                    DestroyUnityObject(capsules[i]);
                 }
             }
 
@@ -147,7 +147,7 @@ namespace ChessVR.Runtime
             {
                 if (spheres[i] != null)
                 {
-                    Destroy(spheres[i]);
+                    DestroyUnityObject(spheres[i]);
                 }
             }
 
@@ -156,7 +156,7 @@ namespace ChessVR.Runtime
             {
                 if (meshCols[i] != null)
                 {
-                    Destroy(meshCols[i]);
+                    DestroyUnityObject(meshCols[i]);
                 }
             }
 
@@ -167,7 +167,7 @@ namespace ChessVR.Runtime
                 var b = childBoxes[i];
                 if (b != null && b.gameObject != gameObject)
                 {
-                    Destroy(b);
+                    DestroyUnityObject(b);
                 }
             }
 
@@ -294,6 +294,23 @@ namespace ChessVR.Runtime
             if (_xrGrabInteractable != null)
             {
                 _xrGrabInteractable.enabled = canInteract;
+            }
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(target);
+            }
+            else
+            {
+                DestroyImmediate(target);
             }
         }
 

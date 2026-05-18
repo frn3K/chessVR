@@ -27,7 +27,7 @@ namespace ChessVR.Runtime
         [Header("Layout")]
         [SerializeField] private float squareSize = 0.32f;
         [SerializeField] private float boardThickness = 0.04f;
-        [SerializeField] private float boardHeight = 0.8f;
+        [SerializeField] private float boardHeight = 0.02f;
         [SerializeField] private float boardPadding = 0.08f;
 
         [Header("Visuals")]
@@ -53,8 +53,18 @@ namespace ChessVR.Runtime
         [Tooltip("Maksymalna odleglosc od srodka pola (lokalne XZ), zeby uznac drop za trafiony.")]
         [SerializeField] private float dropSquareSnapRadius = 0.28f;
 
-        [Header("Feedback")]
-        [SerializeField] private Color statusTextColor = new(0.95f, 0.95f, 0.95f, 1f);
+        [Header("XR player height")]
+        [Tooltip("Trzyma root XR Origin na wysokosci planszy, zeby gracz nie startowal ani nie zostawal ponad szachownica.")]
+        [SerializeField] private bool keepXrOriginAtBoardHeight = true;
+
+        [Tooltip("Ustawia POV gracza troche nad najwyzsza figura zamiast na wysokosci podlogi albo pelnego wzrostu.")]
+        [SerializeField] private bool keepXrCameraAbovePieces = true;
+
+        [Tooltip("Dodatkowy zapas nad najwyzsza figura dla pozycji oczu gracza.")]
+        [SerializeField] private float xrEyeClearanceAboveTallestPiece = 0.12f;
+
+        [Tooltip("Fallback wysokosci oczu nad plansza, gdy renderery figur nie sa jeszcze dostepne.")]
+        [SerializeField] private float xrFallbackEyeHeightAboveBoard = 0.7f;
 
         [Tooltip("Promień dopasowania figury do pola (przestrzeń lokalna PiecesRoot), w jednostkach świata lokalnego — duży = ręczne ustawienia.")]
         [SerializeField] private float pieceSquareMatchRadius = 0.9f;
@@ -67,6 +77,9 @@ namespace ChessVR.Runtime
         [Tooltip("Opcjonalny GameUIManager do wyświetlania panelu końca gry (mat/pat/remis).")]
         [SerializeField] private GameUIManager gameUIManager;
 
+        [Header("Audio")]
+        [SerializeField] private GameAudioManager gameAudioManager;
+
         private Transform _boardRoot;
         private Transform _piecesRoot;
         private Transform _highlightsRoot;
@@ -74,7 +87,8 @@ namespace ChessVR.Runtime
         private BoardSquare? _selectedSquare;
         private readonly List<ChessMove> _selectedMoves = new();
         private readonly List<ChessMove> _pendingPromotionMoves = new();
-        private TextMesh _statusText;
+        private Transform _xrOrigin;
+        private Transform _xrCameraOffset;
 
         private void Awake()
         {
@@ -102,6 +116,13 @@ namespace ChessVR.Runtime
                 UpdateStatusIndicator();
                 UpdateAllPiecesInteractability();
             }
+
+            ApplyXrPlayerHeight();
+        }
+
+        private void LateUpdate()
+        {
+            ApplyXrPlayerHeight();
         }
 
         [ContextMenu("Rebuild Board")]
@@ -180,7 +201,7 @@ namespace ChessVR.Runtime
                     var view = childViews[v];
                     if (view != null && view.gameObject != target)
                     {
-                        Destroy(view);
+                        DestroyUnityObject(view);
                     }
                 }
 
@@ -223,19 +244,19 @@ namespace ChessVR.Runtime
             var pieceView = root.GetComponent<PieceView>();
             if (pieceView != null)
             {
-                Destroy(pieceView);
+                DestroyUnityObject(pieceView);
             }
 
             var grab = root.GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
             if (grab != null)
             {
-                Destroy(grab);
+                DestroyUnityObject(grab);
             }
 
             var body = root.GetComponent<Rigidbody>();
             if (body != null)
             {
-                Destroy(body);
+                DestroyUnityObject(body);
             }
         }
 
@@ -246,7 +267,7 @@ namespace ChessVR.Runtime
             {
                 if (capsules[i] != null)
                 {
-                    Destroy(capsules[i]);
+                    DestroyUnityObject(capsules[i]);
                 }
             }
         }
@@ -574,6 +595,7 @@ namespace ChessVR.Runtime
 
             if (_pendingPromotionMoves.Count > 0)
             {
+                PlayInvalidFeedback();
                 pieceView.SnapBackToGrabStart();
                 return;
             }
@@ -581,12 +603,14 @@ namespace ChessVR.Runtime
             var board = gameController?.CurrentBoard;
             if (board != null && (board.IsCheckmate(board.SideToMove) || board.IsStalemate(board.SideToMove)))
             {
+                PlayInvalidFeedback();
                 pieceView.SnapBackToGrabStart();
                 return;
             }
 
             if (!_selectedSquare.HasValue || !_selectedSquare.Value.Equals(pieceView.Square))
             {
+                PlayInvalidFeedback();
                 pieceView.SnapBackToGrabStart();
                 return;
             }
@@ -595,6 +619,7 @@ namespace ChessVR.Runtime
             // same flow as TryHandleSquareInteraction called by the mouse/click path.
             if (!TryGetSquareFromWorldPosition(dropWorldPosition, out var targetSquare))
             {
+                PlayInvalidFeedback();
                 pieceView.SnapBackToGrabStart();
                 ClearLegalMoveHighlights();
                 return;
@@ -603,6 +628,7 @@ namespace ChessVR.Runtime
             var handled = TryHandleSquareInteraction(targetSquare, clearOnInvalidDestination: true, out var moveApplied);
             if (!handled || !moveApplied)
             {
+                PlayInvalidFeedback();
                 pieceView.SnapBackToGrabStart();
             }
         }
@@ -642,6 +668,7 @@ namespace ChessVR.Runtime
             }
 
             _selectedMoves.AddRange(legalMoves);
+            ResolveAudioManager()?.PlayPickup();
             var seen = new HashSet<BoardSquare>();
             for (var i = 0; i < legalMoves.Count; i++)
             {
@@ -681,6 +708,8 @@ namespace ChessVR.Runtime
             {
                 gameController.ResetMatch();
             }
+
+            ResolveAudioManager();
         }
 
         private void EnsureRoots()
@@ -689,7 +718,7 @@ namespace ChessVR.Runtime
             _piecesRoot = FindOrCreateChild("PiecesRoot");
             _highlightsRoot = FindOrCreateChild("LegalHighlightsRoot");
             _promotionChoicesRoot = FindOrCreateChild("PromotionChoicesRoot");
-            EnsureStatusIndicator();
+            RemoveLegacyStatusIndicator();
         }
 
         private Transform FindOrCreateChild(string childName)
@@ -705,24 +734,104 @@ namespace ChessVR.Runtime
             return child.transform;
         }
 
-        private void EnsureStatusIndicator()
+        private void ApplyXrPlayerHeight()
         {
-            var statusRoot = FindOrCreateChild("StatusTextRoot");
-            _statusText = statusRoot.GetComponent<TextMesh>();
-            if (_statusText == null)
+            if (!keepXrOriginAtBoardHeight || !TryResolveXrOrigin())
             {
-                _statusText = statusRoot.gameObject.AddComponent<TextMesh>();
+                return;
             }
 
-            statusRoot.transform.localPosition = new Vector3(0f, boardHeight + 0.72f, -(squareSize * 6.2f));
-            statusRoot.transform.localRotation = Quaternion.identity;
-            statusRoot.transform.localScale = Vector3.one * 0.08f;
+            var targetWorldY = transform.TransformPoint(new Vector3(0f, boardHeight, 0f)).y;
+            var xrPosition = _xrOrigin.position;
+            if (!Mathf.Approximately(xrPosition.y, targetWorldY))
+            {
+                _xrOrigin.position = new Vector3(xrPosition.x, targetWorldY, xrPosition.z);
+            }
 
-            _statusText.anchor = TextAnchor.MiddleCenter;
-            _statusText.alignment = TextAlignment.Center;
-            _statusText.fontSize = 48;
-            _statusText.characterSize = 0.1f;
-            _statusText.color = statusTextColor;
+            ApplyXrCameraHeight(targetWorldY);
+        }
+
+        private bool TryResolveXrOrigin()
+        {
+            if (_xrOrigin == null)
+            {
+                var xrOriginObject = GameObject.Find("XROrigin")
+                                     ?? GameObject.Find("XR Origin")
+                                     ?? GameObject.Find("XR Origin (XR Rig)");
+                if (xrOriginObject != null)
+                {
+                    _xrOrigin = xrOriginObject.transform;
+                }
+            }
+
+            if (_xrOrigin == null)
+            {
+                return false;
+            }
+
+            if (_xrCameraOffset == null)
+            {
+                _xrCameraOffset = _xrOrigin.Find("Camera Offset");
+            }
+
+            return true;
+        }
+
+        private void ApplyXrCameraHeight(float xrOriginWorldY)
+        {
+            if (!keepXrCameraAbovePieces || _xrCameraOffset == null)
+            {
+                return;
+            }
+
+            var targetEyeWorldY = TryGetTallestPieceWorldY(out var tallestPieceWorldY)
+                ? tallestPieceWorldY + Mathf.Max(0f, xrEyeClearanceAboveTallestPiece)
+                : xrOriginWorldY + Mathf.Max(0f, xrFallbackEyeHeightAboveBoard);
+
+            var localEyeY = Mathf.Max(0f, targetEyeWorldY - xrOriginWorldY);
+            var offsetPosition = _xrCameraOffset.localPosition;
+            if (!Mathf.Approximately(offsetPosition.y, localEyeY))
+            {
+                _xrCameraOffset.localPosition = new Vector3(offsetPosition.x, localEyeY, offsetPosition.z);
+            }
+        }
+
+        private bool TryGetTallestPieceWorldY(out float tallestPieceWorldY)
+        {
+            tallestPieceWorldY = 0f;
+            if (_piecesRoot == null)
+            {
+                return false;
+            }
+
+            var renderers = _piecesRoot.GetComponentsInChildren<Renderer>(true);
+            var hasRenderer = false;
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null || !renderer.enabled)
+                {
+                    continue;
+                }
+
+                var top = renderer.bounds.max.y;
+                if (!hasRenderer || top > tallestPieceWorldY)
+                {
+                    tallestPieceWorldY = top;
+                    hasRenderer = true;
+                }
+            }
+
+            return hasRenderer;
+        }
+
+        private void RemoveLegacyStatusIndicator()
+        {
+            var statusRoot = transform.Find("StatusTextRoot");
+            if (statusRoot != null)
+            {
+                DestroyUnityObject(statusRoot.gameObject);
+            }
         }
 
         private void EnsureSquareViewsForBoardUnderRoot()
@@ -747,13 +856,6 @@ namespace ChessVR.Runtime
         private void BuildBoard()
         {
             var boardWorldSize = squareSize * 8f;
-
-            var stand = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            stand.name = "BoardStand";
-            stand.transform.SetParent(_boardRoot, false);
-            stand.transform.localPosition = new Vector3(0f, boardHeight * 0.5f, 0f);
-            stand.transform.localScale = new Vector3(boardWorldSize * 0.38f, boardHeight, boardWorldSize * 0.38f);
-            Tint(stand, borderColor * 0.85f);
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
             border.name = "BoardBorder";
@@ -1070,7 +1172,7 @@ namespace ChessVR.Runtime
             var col = gameObject.GetComponent<Collider>();
             if (col != null)
             {
-                Destroy(col);
+                DestroyUnityObject(col);
             }
         }
 
@@ -1141,6 +1243,11 @@ namespace ChessVR.Runtime
 
         private Vector3 PieceLocalPosition(BoardSquare square, PieceType pieceType)
         {
+            if (HasPiecePrefabs())
+            {
+                return SquareToLocalPosition(square, boardHeight + 0.005f);
+            }
+
             var basePosition = SquareToLocalPosition(square, boardHeight + 0.03f);
             var yOffset = pieceType switch
             {
@@ -1155,6 +1262,24 @@ namespace ChessVR.Runtime
 
             basePosition.y += yOffset;
             return basePosition;
+        }
+
+        private bool HasPiecePrefabs()
+        {
+            if (piecePrefabs == null || piecePrefabs.Length == 0)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < piecePrefabs.Length; i++)
+            {
+                if (piecePrefabs[i].whitePrefab != null || piecePrefabs[i].blackPrefab != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool TryGetSelectedMove(BoardSquare square, out ChessMove move)
@@ -1304,6 +1429,7 @@ namespace ChessVR.Runtime
             }
 
             var targetPiece = board.GetPiece(move.To);
+            var isCapture = IsCaptureMove(move, movingPiece, targetPiece);
             if (!gameController.TryMakeMove(move))
             {
                 return false;
@@ -1312,11 +1438,30 @@ namespace ChessVR.Runtime
             HandleCaptureVisuals(move, movingPiece, targetPiece);
             HandleCastlingVisualMove(move, movingPiece);
             UpdateMovedPieceVisual(movingView, move, movingPiece, board.GetPiece(move.To));
+            if (isCapture)
+            {
+                ResolveAudioManager()?.PlayCapture();
+            }
+            else
+            {
+                ResolveAudioManager()?.PlayDrop();
+            }
+
             ClearLegalMoveHighlights();
             UpdateStatusIndicator();
             gameUIManager?.CheckAndShowIfGameOver(gameController.CurrentBoard);
             UpdateAllPiecesInteractability();
             return true;
+        }
+
+        private static bool IsCaptureMove(ChessMove move, Piece movingPiece, Piece targetPiece)
+        {
+            if (!targetPiece.IsNone)
+            {
+                return true;
+            }
+
+            return movingPiece.Type == PieceType.Pawn && move.From.File != move.To.File;
         }
 
         private void UpdateMovedPieceVisual(PieceView movingView, ChessMove move, Piece movingPiece, Piece resultingPiece)
@@ -1327,7 +1472,7 @@ namespace ChessVR.Runtime
                 return;
             }
 
-            Destroy(movingView.gameObject);
+            DestroyUnityObject(movingView.gameObject);
             CreatePieceView(move.To, resultingPiece);
         }
 
@@ -1383,7 +1528,7 @@ namespace ChessVR.Runtime
                 return false;
             }
 
-            Destroy(pieceView.gameObject);
+            DestroyUnityObject(pieceView.gameObject);
             return true;
         }
 
@@ -1453,46 +1598,26 @@ namespace ChessVR.Runtime
 
         private void UpdateStatusIndicator()
         {
-            if (_statusText == null)
-            {
-                return;
-            }
-
             var board = gameController != null ? gameController.CurrentBoard : null;
-            if (board == null)
+            gameUIManager?.UpdateGameStatus(board, _pendingPromotionMoves.Count > 0);
+        }
+
+        private GameAudioManager ResolveAudioManager()
+        {
+            if (gameAudioManager != null)
             {
-                _statusText.text = string.Empty;
-                return;
+                return gameAudioManager;
             }
 
-            if (_pendingPromotionMoves.Count > 0)
-            {
-                var movingSide = board.SideToMove == PieceColor.White ? "White" : "Black";
-                _statusText.text = $"{movingSide}: choose promotion";
-                return;
-            }
+            gameAudioManager = GameAudioManager.Instance != null
+                ? GameAudioManager.Instance
+                : FindFirstObjectByType<GameAudioManager>();
+            return gameAudioManager;
+        }
 
-            if (board.IsCheckmate(board.SideToMove))
-            {
-                var winner = board.SideToMove == PieceColor.White ? "Black" : "White";
-                _statusText.text = $"Checkmate. {winner} wins";
-                return;
-            }
-
-            if (board.IsStalemate(board.SideToMove))
-            {
-                _statusText.text = "Stalemate";
-                return;
-            }
-
-            var sideToMove = board.SideToMove == PieceColor.White ? "White" : "Black";
-            if (board.IsInCheck(board.SideToMove))
-            {
-                _statusText.text = $"{sideToMove} to move - check";
-                return;
-            }
-
-            _statusText.text = $"{sideToMove} to move";
+        private void PlayInvalidFeedback()
+        {
+            ResolveAudioManager()?.PlayInvalid();
         }
 
         private static void ClearChildren(Transform root)
@@ -1500,14 +1625,24 @@ namespace ChessVR.Runtime
             for (var i = root.childCount - 1; i >= 0; i--)
             {
                 var child = root.GetChild(i).gameObject;
-                if (Application.isPlaying)
-                {
-                    Destroy(child);
-                }
-                else
-                {
-                    DestroyImmediate(child);
-                }
+                DestroyUnityObject(child);
+            }
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(target);
+            }
+            else
+            {
+                DestroyImmediate(target);
             }
         }
 
