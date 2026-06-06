@@ -1,4 +1,8 @@
-# VR Chess
+# VR Chess (chessVR)
+
+Open-source Unity 6 PCVR chess game built with OpenXR and XR Interaction Toolkit. Solo-maintained reference project for indie VR developers: domain-driven chess logic, EditMode tests, desktop/XR simulator workflow, and full architecture docs.
+
+> Polski opis i status projektu ponizej.
 
 Repo preproduction dla gry szachowej VR budowanej w Unity.
 
@@ -26,21 +30,21 @@ Repo preproduction dla gry szachowej VR budowanej w Unity.
 
 ## Co jest w repo
 
-- [docs/README.md](/C:/Users/fmied/Desktop/chessVR/docs/README.md) - indeks dokumentacji
-- [docs/01-product-background.md](/C:/Users/fmied/Desktop/chessVR/docs/01-product-background.md) - wizja produktu i zalozenia
-- [docs/02-technical-foundation.md](/C:/Users/fmied/Desktop/chessVR/docs/02-technical-foundation.md) - stack techniczny i zaleznosci
-- [docs/03-unity-setup.md](/C:/Users/fmied/Desktop/chessVR/docs/03-unity-setup.md) - setup srodowiska i bootstrap projektu
-- [docs/04-architecture.md](/C:/Users/fmied/Desktop/chessVR/docs/04-architecture.md) - architektura projektu
-- [docs/05-mvp-scope.md](/C:/Users/fmied/Desktop/chessVR/docs/05-mvp-scope.md) - zakres MVP
-- [docs/06-roadmap.md](/C:/Users/fmied/Desktop/chessVR/docs/06-roadmap.md) - roadmapa etapow
-- [docs/07-todo.md](/C:/Users/fmied/Desktop/chessVR/docs/07-todo.md) - backlog i lista prac
-- [docs/08-open-questions.md](/C:/Users/fmied/Desktop/chessVR/docs/08-open-questions.md) - otwarte pytania i domyslne decyzje
-- [docs/09-sources.md](/C:/Users/fmied/Desktop/chessVR/docs/09-sources.md) - zrodla
-- [Assets/Scripts/Domain/BoardState.cs](/C:/Users/fmied/Desktop/chessVR/Assets/Scripts/Domain/BoardState.cs) - pierwszy model zasad i stanu gry
-- [Assets/Tests/EditMode/BoardStateTests.cs](/C:/Users/fmied/Desktop/chessVR/Assets/Tests/EditMode/BoardStateTests.cs) - testy EditMode dla domeny
-- [Assets/Scripts/Runtime/BoardPresenter.cs](/C:/Users/fmied/Desktop/chessVR/Assets/Scripts/Runtime/BoardPresenter.cs) - generowanie planszy i figur w scenie
-- [Assets/Scripts/Runtime/ChessGameController.cs](/C:/Users/fmied/Desktop/chessVR/Assets/Scripts/Runtime/ChessGameController.cs) - runtimeowy stan partii dla sceny
-- [tools/check-environment.ps1](/C:/Users/fmied/Desktop/chessVR/tools/check-environment.ps1) - szybki audit lokalnego srodowiska
+- [docs/README.md](docs/README.md) - indeks dokumentacji
+- [docs/01-product-background.md](docs/01-product-background.md) - wizja produktu i zalozenia
+- [docs/02-technical-foundation.md](docs/02-technical-foundation.md) - stack techniczny i zaleznosci
+- [docs/03-unity-setup.md](docs/03-unity-setup.md) - setup srodowiska i bootstrap projektu
+- [docs/04-architecture.md](docs/04-architecture.md) - architektura projektu
+- [docs/05-mvp-scope.md](docs/05-mvp-scope.md) - zakres MVP
+- [docs/06-roadmap.md](docs/06-roadmap.md) - roadmapa etapow
+- [docs/07-todo.md](docs/07-todo.md) - backlog i lista prac
+- [docs/08-open-questions.md](docs/08-open-questions.md) - otwarte pytania i domyslne decyzje
+- [docs/09-sources.md](docs/09-sources.md) - zrodla
+- [Assets/Scripts/Domain/BoardState.cs](Assets/Scripts/Domain/BoardState.cs) - pierwszy model zasad i stanu gry
+- [Assets/Tests/EditMode/BoardStateTests.cs](Assets/Tests/EditMode/BoardStateTests.cs) - testy EditMode dla domeny
+- [Assets/Scripts/Runtime/BoardPresenter.cs](Assets/Scripts/Runtime/BoardPresenter.cs) - generowanie planszy i figur w scenie
+- [Assets/Scripts/Runtime/ChessGameController.cs](Assets/Scripts/Runtime/ChessGameController.cs) - runtimeowy stan partii dla sceny
+- [tools/check-environment.ps1](tools/check-environment.ps1) - szybki audit lokalnego srodowiska
 
 ## Najwazniejsze decyzje
 
