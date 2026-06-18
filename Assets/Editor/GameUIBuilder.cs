@@ -8,7 +8,7 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.UI;
 
-namespace Codex.EditorTools
+namespace ChessVR.Editor
 {
     public static class GameUIBuilder
     {
@@ -22,7 +22,7 @@ namespace Codex.EditorTools
         private static readonly Quaternion CanvasLocalRotation = Quaternion.Euler(0f, -90f, 0f);
         private const float CanvasLocalScale = 0.0015f;
 
-        [MenuItem("Tools/Generate Chess UI")]
+        [MenuItem("ChessVR/Generate Chess UI")]
         public static void GenerateChessUI()
         {
             var sandboxRoot = GameObject.Find("ChessSandboxRoot");

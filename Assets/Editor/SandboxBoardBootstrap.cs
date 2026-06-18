@@ -4,53 +4,15 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-namespace Codex.EditorTools
+namespace ChessVR.Editor
 {
     public static class SandboxBoardBootstrap
     {
-        private const string SandboxScenePath = "Assets/Scenes/Sandbox.unity";
         private const string PiecePrefabFolder = "Assets/Chess MEGA-pack/prefabs/pieces/lowPoly2/";
         private const float BoardSurfaceWorldY = 0.02f;
         private const float PlayerEyeHeightAboveBoard = 0.7f;
 
-        public static void ApplyAndExit()
-        {
-            var scene = EditorSceneManager.OpenScene(SandboxScenePath, OpenSceneMode.Single);
-
-            var sandboxRoot = GameObject.Find("ChessSandboxRoot");
-            if (sandboxRoot == null)
-            {
-                sandboxRoot = new GameObject("ChessSandboxRoot");
-            }
-
-            sandboxRoot.transform.position = new Vector3(0f, 0f, 1.2f);
-
-            var controller = sandboxRoot.GetComponent<ChessGameController>();
-            if (controller == null)
-            {
-                controller = sandboxRoot.AddComponent<ChessGameController>();
-            }
-
-            var presenter = sandboxRoot.GetComponent<BoardPresenter>();
-            if (presenter == null)
-            {
-                presenter = sandboxRoot.AddComponent<BoardPresenter>();
-            }
-
-            WirePiecePrefabs(presenter);
-            presenter.RebuildImmediate();
-            MinimalStudioBuilder.BuildForSandbox(sandboxRoot);
-            GameUIBuilder.BuildChessUIForSandbox(sandboxRoot, selectPanel: false, showDialog: false);
-
-            SetupXROrigin();
-
-            EditorSceneManager.MarkSceneDirty(scene);
-            EditorSceneManager.SaveScene(scene);
-            AssetDatabase.SaveAssets();
-            EditorApplication.Exit(0);
-        }
-
-        [MenuItem("Tools/Wire Piece Prefabs")]
+        [MenuItem("ChessVR/Wire Piece Prefabs")]
         public static void WirePiecePrefabsMenu()
         {
             var sandboxRoot = GameObject.Find("ChessSandboxRoot");

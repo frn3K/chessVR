@@ -1,25 +1,12 @@
-# Audio Attribution
+# Źródła audio
 
-All clips selected for the ChessVR minimal studio MVP are CC0.
+Wszystkie użyte pliki dźwiękowe mają licencję CC0.
 
-## Music
+## Muzyka
 
-- `HeavenlyLoop.ogg`
-  - Source: OpenGameArt, "Heavenly Loop"
-  - URL: https://opengameart.org/content/heavenly-loop
-  - Author: isaiah658
-  - License: CC0
+- `HeavenlyLoop.ogg` — [Heavenly Loop](https://opengameart.org/content/heavenly-loop) (isaiah658)
 
-## SFX
+## Efekty dźwiękowe
 
-- `piece_drop.ogg`, `piece_capture.ogg`, `piece_invalid.ogg`, `game_over.ogg`
-  - Source: OpenGameArt, "80 CC0 RPG SFX"
-  - URL: https://opengameart.org/content/80-cc0-rpg-sfx
-  - Author: rubberduck
-  - License: CC0
-
-- `piece_pickup.ogg`
-  - Source: OpenGameArt, "54 Casino sound effects (cards, dice, chips)"
-  - URL: https://opengameart.org/content/54-casino-sound-effects-cards-dice-chips
-  - Author: Kenney
-  - License: CC0
+- `piece_drop.ogg`, `piece_capture.ogg`, `piece_invalid.ogg`, `game_over.ogg` — [80 CC0 RPG SFX](https://opengameart.org/content/80-cc0-rpg-sfx) (rubberduck)
+- `piece_pickup.ogg` — [54 Casino sound effects](https://opengameart.org/content/54-casino-sound-effects-cards-dice-chips) (Kenney)

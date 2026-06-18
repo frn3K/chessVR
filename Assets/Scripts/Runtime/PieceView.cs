@@ -23,11 +23,6 @@ namespace ChessVR.Runtime
         public PieceType PieceType => pieceType;
         public PieceColor PieceColor => pieceColor;
 
-        /// <summary>
-        /// Canonical local-space Y at which this piece sits on the board.
-        /// Captured once in Apply() so MovePieceVisual always snaps back to the
-        /// correct board height regardless of where the player released it in VR.
-        /// </summary>
         public float RestLocalY => _restLocalY;
 
         public void Apply(Piece piece, BoardSquare square, ChessGameController game, BoardPresenter board)
@@ -284,11 +279,6 @@ namespace ChessVR.Runtime
             _xrGrabInteractable.selectExited.AddListener(OnXrSelectExited);
         }
 
-        /// <summary>
-        /// Enables or disables the XRGrabInteractable component so that VR hands can
-        /// only physically grab pieces that are legal to move. Has no effect on the
-        /// mouse/click path.
-        /// </summary>
         public void SetInteractable(bool canInteract)
         {
             if (_xrGrabInteractable != null)

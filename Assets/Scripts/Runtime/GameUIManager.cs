@@ -5,11 +5,6 @@ using UnityEngine.UI;
 
 namespace ChessVR.Runtime
 {
-    /// <summary>
-    /// Zarządza world-space HUD-em gry: statusem partii, panelem końca gry i audio.
-    /// Podepnij ten komponent na dowolnym GameObject w scenie,
-    /// a następnie przypisz referencje w Inspektorze.
-    /// </summary>
     public sealed class GameUIManager : MonoBehaviour
     {
         [Header("Panel końca gry")]
@@ -85,7 +80,6 @@ namespace ChessVR.Runtime
             }
         }
 
-        /// <summary>Pokazuje panel z podaną wiadomością (np. „Wygrywają Białe!").</summary>
         public void ShowGameOver(string message)
         {
             if (gameOverText != null)
@@ -106,7 +100,6 @@ namespace ChessVR.Runtime
             }
         }
 
-        /// <summary>Chowa panel — wywoływane automatycznie przy resecie partii.</summary>
         public void HideGameOver()
         {
             if (gameOverPanel != null)
@@ -117,7 +110,6 @@ namespace ChessVR.Runtime
             _gameOverShown = false;
         }
 
-        /// <summary>Obsługuje kliknięcie przycisku „Zagraj ponownie".</summary>
         public void OnPlayAgainClicked()
         {
             HideGameOver();
@@ -164,10 +156,6 @@ namespace ChessVR.Runtime
             SetStatusText($"Ruch: {sideToMove}", state);
         }
 
-        /// <summary>
-        /// Sprawdza stan planszy i – jeśli gra się zakończyła – wywołuje ShowGameOver.
-        /// Wywoływana z BoardPresenter po każdym wykonanym ruchu.
-        /// </summary>
         internal void CheckAndShowIfGameOver(BoardState board)
         {
             if (board == null)

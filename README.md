@@ -1,67 +1,48 @@
-# VR Chess (chessVR)
+# Chess VR
 
-Open-source Unity 6 PCVR chess game built with OpenXR and XR Interaction Toolkit. Solo-maintained reference project for indie VR developers: domain-driven chess logic, EditMode tests, desktop/XR simulator workflow, and full architecture docs.
+Gra szachowa w wirtualnej rzeczywistości — projekt zaliczeniowy z przedmiotu *Systemy wirtualnej i rzeczywistej rzeczywistości*.
 
-> Polski opis i status projektu ponizej.
+**Autorzy:** Konrad Markowicz (177127), Franciszek Międlar (177129)
 
-Repo preproduction dla gry szachowej VR budowanej w Unity.
+## Opis
 
-## Status
+Gracz znajduje się w pomieszczeniu 3D z planszą szachową i wykonuje ruchy przez chwycenie figury kontrolerem VR. System waliduje posunięcia według zasad szachów — nielegalne ruchy są odrzucane, a figura wraca na poprzednie pole.
 
-- Repo lokalne zostalo zainicjalizowane.
-- Dokumentacja startowa i plan techniczny sa gotowe.
-- Unity Hub, Unity Editor i Visual Studio zostaly zainstalowane lokalnie.
-- Licencja Unity jest aktywna i projekt otwiera sie z poziomu edytora.
-- Pakiety `URP`, `Input System`, `XR Interaction Toolkit`, `XR Management` i `OpenXR` sa juz rozwiazane.
-- Sample `Starter Assets` i `XR Interaction Simulator` zostaly zaimportowane do `Assets/Samples`.
-- Istnieje pierwsza scena startowa `Sandbox`.
-- Istnieje pierwszy czysty model domenowy szachow z testami EditMode.
-- `Sandbox` pokazuje juz plansze i placeholderowe figury generowane z `BoardState`.
-- Projekt jest przygotowany pod workflow `Unity + OpenXR + XR Interaction Toolkit + desktop/XR simulator`.
+## Technologie
 
-## Zalozenia bazowe
+- Unity 6.3 LTS (`6000.3.12f1`)
+- C#, Universal Render Pipeline
+- OpenXR, XR Interaction Toolkit 3.3.1
+- Unity Input System
+- Platforma: Windows PCVR
 
-- Silnik: Unity
-- Wersja edytora: Unity 6.3 LTS (`6000.3.x`)
-- Platforma pierwszego MVP: Windows PCVR
-- Tryb gry: solo vs AI
-- Interakcja: chwyt figury i snap tylko na legalne pole
-- Brak headsetu na starcie: obowiazkowy tryb debugowania na desktopie i `XR Interaction Simulator`
+## Uruchomienie
 
-## Co jest w repo
+1. Zainstaluj [Unity Hub](https://unity.com/download) z edytorem **6000.3.12f1**.
+2. Sklonuj repozytorium:
+   ```bash
+   git clone https://github.com/frn3K/chessVR.git
+   ```
+3. Otwórz folder projektu w Unity Hub.
+4. Otwórz scenę `Assets/Scenes/Sandbox.unity`.
+5. Naciśnij **Play** — gra działa w symulatorze XR (bez headsetu).
+6. Do testu na headsetcie ustaw aktywny runtime OpenXR (Meta Link lub SteamVR).
 
-- [docs/README.md](docs/README.md) - indeks dokumentacji
-- [docs/01-product-background.md](docs/01-product-background.md) - wizja produktu i zalozenia
-- [docs/02-technical-foundation.md](docs/02-technical-foundation.md) - stack techniczny i zaleznosci
-- [docs/03-unity-setup.md](docs/03-unity-setup.md) - setup srodowiska i bootstrap projektu
-- [docs/04-architecture.md](docs/04-architecture.md) - architektura projektu
-- [docs/05-mvp-scope.md](docs/05-mvp-scope.md) - zakres MVP
-- [docs/06-roadmap.md](docs/06-roadmap.md) - roadmapa etapow
-- [docs/07-todo.md](docs/07-todo.md) - backlog i lista prac
-- [docs/08-open-questions.md](docs/08-open-questions.md) - otwarte pytania i domyslne decyzje
-- [docs/09-sources.md](docs/09-sources.md) - zrodla
-- [Assets/Scripts/Domain/BoardState.cs](Assets/Scripts/Domain/BoardState.cs) - pierwszy model zasad i stanu gry
-- [Assets/Tests/EditMode/BoardStateTests.cs](Assets/Tests/EditMode/BoardStateTests.cs) - testy EditMode dla domeny
-- [Assets/Scripts/Runtime/BoardPresenter.cs](Assets/Scripts/Runtime/BoardPresenter.cs) - generowanie planszy i figur w scenie
-- [Assets/Scripts/Runtime/ChessGameController.cs](Assets/Scripts/Runtime/ChessGameController.cs) - runtimeowy stan partii dla sceny
-- [tools/check-environment.ps1](tools/check-environment.ps1) - szybki audit lokalnego srodowiska
+## Testy
 
-## Najwazniejsze decyzje
+Testy logiki szachowej: `Assets/Tests/EditMode/BoardStateTests.cs`
 
-- Stawiamy na `Unity`, bo dla tej gry daje najlepszy balans szybkosci iteracji, stacku VR i ryzyka projektu.
-- Uzywamy `OpenXR`, a nie vendor-specific SDK jako glownego fundamentu.
-- Rzeczy VR sa projektowane tak, by logika szachow byla niezalezna od prezentacji i interakcji.
-- AI ma byc podlaczane przez adapter. Na poczatku mozemy miec prosty bot lub tryb debug, a pozniej `Stockfish` za procesem UCI.
+Uruchomienie: **Window → General → Test Runner → EditMode → Run All**
 
-## Kolejnosc startu
+## Struktura kodu
 
-1. Otworzyc repo w `Unity`.
-2. Poczekac az Unity dokonczy import.
-3. Otworzyc `Assets/Scenes/Sandbox.unity`.
-4. Zweryfikowac scene i dopiac recznie ewentualne ustawienia `XR Plug-in Management`, jesli edytor o nie poprosi.
-5. Zaczac budowe warstwy domenowej szachow.
+```
+Assets/Scripts/
+├── Domain/      — logika szachowa (BoardState)
+├── Runtime/     — prezentacja, interakcja VR, UI
+└── Contracts/   — interfejsy między warstwami
+```
 
-## Uwagi
+## Licencja
 
-- `OpenXR runtime` na systemie nadal nie jest skonfigurowany, ale nie blokuje to pracy przez `XR Interaction Simulator`.
-- Ten repo jest przygotowany tak, zebys mial komplet backgroundu i decyzji jeszcze przed pierwszym dniem implementacji.
+Kod projektu: [MIT](LICENSE). Modele figur: Chess MEGA-pack (Asset Store). Dźwięki: CC0 — szczegóły w `Assets/Audio/ATTRIBUTION.md`.

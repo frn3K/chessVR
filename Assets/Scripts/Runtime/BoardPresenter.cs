@@ -300,9 +300,6 @@ namespace ChessVR.Runtime
             return hasAny;
         }
 
-        /// <summary>
-        /// Dla każdej figury pod <see cref="_piecesRoot"/> dopina <see cref="PieceView"/> i odświeża referencje.
-        /// </summary>
         public void EnsurePieceViewsForPiecesUnderRoot()
         {
             EnsureDependencies();
@@ -345,9 +342,6 @@ namespace ChessVR.Runtime
             }
         }
 
-        /// <summary>
-        /// Dopasowuje pole i figurę po XZ w przestrzeni lokalnej <see cref="_piecesRoot"/> (duży próg pod ręczne ustawienia).
-        /// </summary>
         private bool TryMatchPieceAtSquareFromLocalPosition(Vector3 localOnPiecesRoot, BoardState board, out BoardSquare square, out Piece piece)
         {
             square = default;
@@ -397,10 +391,6 @@ namespace ChessVR.Runtime
             ConfigureInputSystemUiModule(uiModule);
         }
 
-        /// <summary>
-        /// Przywraca domyślny asset akcji UI (wbudowany DefaultInputActions) i referencje Point / Click itd.,
-        /// gdy moduł ma puste sloty — typowy przypadek przy ręcznej scenie bez przypisanego Input Action Asset.
-        /// </summary>
         private static void ConfigureInputSystemUiModule(InputSystemUIInputModule module)
         {
             if (module == null)
@@ -426,9 +416,6 @@ namespace ChessVR.Runtime
                    || module.leftClick == null || module.leftClick.action == null;
         }
 
-        /// <summary>
-        /// Ustawia opcję inspektora „Enable Builtin Actions As Fallback”, jeśli istnieje w tej wersji Input Systemu.
-        /// </summary>
         private static void TryEnableBuiltinActionsAsFallback(InputSystemUIInputModule module)
         {
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
@@ -571,10 +558,6 @@ namespace ChessVR.Runtime
             ShowLegalMoveHighlights(square, legalMoves);
         }
 
-        /// <param name="dropWorldPosition">
-        /// World position of the piece captured at the instant <c>selectExited</c> fired —
-        /// before the XR system can move or reparent the transform during release processing.
-        /// </param>
         public void HandlePieceGrabEnded(PieceView pieceView, Vector3 dropWorldPosition)
         {
             EnsureDependencies();
@@ -653,7 +636,6 @@ namespace ChessVR.Runtime
             UpdateStatusIndicator();
         }
 
-        /// <summary>Rysuje płaskie znaczniki na polach docelowych; lista ruchów pochodzi z <see cref="ChessGameController.GetLegalMovesFrom"/> (adapter zasad).</summary>
         public void ShowLegalMoveHighlights(BoardSquare from, IReadOnlyList<ChessMove> legalMoves)
         {
             EnsureDependencies();
@@ -936,13 +918,6 @@ namespace ChessVR.Runtime
             }
         }
 
-        /// <summary>
-        /// Returns the <see cref="PieceView.RestLocalY"/> of the first piece already in
-        /// <see cref="_piecesRoot"/> that shares <paramref name="piece"/>'s type and colour.
-        /// Used so that a newly spawned (or promoted) piece inherits the exact board-height
-        /// of its siblings rather than relying on the hard-coded <see cref="PieceLocalPosition"/>
-        /// offsets, which are calibrated for procedurally generated geometry.
-        /// </summary>
         private bool TryGetPeerRestLocalY(Piece piece, out float restY)
         {
             restY = 0f;
@@ -1176,13 +1151,6 @@ namespace ChessVR.Runtime
             }
         }
 
-        /// <summary>
-        /// Returns the canonical local-space position (relative to PiecesRoot) for a piece
-        /// resting on <paramref name="square"/> at height <paramref name="restY"/>.
-        /// Used by <see cref="PieceView.SnapBackToGrabStart"/> to recompute the correct
-        /// position from first principles rather than trusting a transform snapshot that
-        /// may have been corrupted by XRI's dynamic-attach machinery.
-        /// </summary>
         public Vector3 GetPieceRestLocalPosition(BoardSquare square, float restY)
         {
             return SquareToLocalPosition(square, restY);
@@ -1196,14 +1164,6 @@ namespace ChessVR.Runtime
             return new Vector3(x, y, z);
         }
 
-        /// <summary>
-        /// Converts a world-space position to a board square by projecting it into the
-        /// coordinate space where the square tiles live (<see cref="_boardRoot"/>).
-        /// Using _boardRoot (not _piecesRoot) ensures the math is anchored to the
-        /// same reference frame used when placing the square GameObjects — identical to
-        /// the square index stored in every BoardSquareView, which is what the mouse/click
-        /// path uses.
-        /// </summary>
         private bool TryGetSquareFromWorldPosition(Vector3 worldPosition, out BoardSquare square)
         {
             square = default;
@@ -1365,12 +1325,6 @@ namespace ChessVR.Runtime
             return root;
         }
 
-        /// <summary>
-        /// Enables XRGrabInteractable only on pieces that belong to the side to move AND
-        /// have at least one legal move. All other pieces are disabled so VR hands cannot
-        /// physically pick them up. Has no effect on the mouse/click path.
-        /// Called after every board state change (game start, move executed, promotion chosen).
-        /// </summary>
         private void UpdateAllPiecesInteractability()
         {
             if (_piecesRoot == null)

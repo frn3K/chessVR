@@ -4,14 +4,14 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace Codex.EditorTools
+namespace ChessVR.Editor
 {
     public static class MinimalStudioBuilder
     {
         private const string StudioRootName = "MinimalStudioRoot";
         private const string AudioManagerName = "GameAudioManager";
 
-        [MenuItem("Tools/Generate Minimal Studio")]
+        [MenuItem("ChessVR/Generate Minimal Studio")]
         public static void GenerateMinimalStudio()
         {
             var sandboxRoot = GameObject.Find("ChessSandboxRoot");
